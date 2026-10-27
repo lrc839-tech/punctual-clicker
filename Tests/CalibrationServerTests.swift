@@ -218,7 +218,7 @@ enum CalibrationServerTests {
             let payload = Data("{\"runId\":\"split\",\"targetsMs\":[1000]}".utf8)
             let prefix = "POST /test-plan HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(payload.count)\r\n\r\n"
             let parts = [Data(prefix.prefix(17).utf8), Data(prefix.dropFirst(17).utf8), payload.prefix(9), payload.dropFirst(9)]
-            try expect(try raw(port, parts.map(Data.init)).status == 200, "拆分请求未重组")
+            try expect(try raw(port, parts).status == 200, "拆分请求未重组")
             let malformed = [
                 "POST /samples HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n",
                 "POST /samples HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx",
