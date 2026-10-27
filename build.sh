@@ -4,8 +4,8 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h}"
 cd "$project_root"
-version="${VERSION:-0.3.0}"
-build_number="${BUILD_NUMBER:-4}"
+version="${VERSION:-0.3.1}"
+build_number="${BUILD_NUMBER:-5}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 install_requested=false
@@ -22,7 +22,7 @@ for argument in "$@"; do
   esac
 done
 if [[ ! "$version" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
-  print -u2 -- "VERSION must have the form 0.3.0."; exit 2
+  print -u2 -- "VERSION must have the form 0.3.1."; exit 2
 fi
 for command_name in xcrun ditto codesign lipo; do
   if ! command -v "$command_name" >/dev/null 2>&1; then

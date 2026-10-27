@@ -6,7 +6,7 @@
 
 ## 下载与安装
 
-在[最新发行版](https://github.com/lrc839-tech/punctual-clicker/releases/latest)中下载 `准点点击器-版本号-universal.dmg`，打开后把「准点点击器」拖到「应用程序」，再从「应用程序」启动。也提供包含同一 App 的 ZIP 包；GitHub 自动生成的 **Source code** 是源码，不是可直接运行的安装包。
+在[最新发行版](https://github.com/lrc839-tech/punctual-clicker/releases/latest)中下载 `PunctualClicker-版本号-macOS-universal.dmg`，打开后把「准点点击器」拖到「应用程序」，再从「应用程序」启动。也提供包含同一 App 的 ZIP 包；GitHub 自动生成的 **Source code** 是源码，不是可直接运行的安装包。
 
 当前发布包采用本地 ad-hoc 签名，**尚未使用 Developer ID 签名及 Apple 公证**。首次从互联网下载后，macOS 可能阻止启动；确认下载来自本项目且未被篡改后，由使用者按照[安装说明](docs/INSTALL.md)处理系统的首次打开提示。这与安装软件依赖无关。
 

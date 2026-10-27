@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.3.1
+
+- 发行包改为稳定的 ASCII 文件名，避免 GitHub 改写中文名称后与校验文件不一致；App 内中文名称不变。
+- 增加 GitHub 自动构建和发布流程，并分开云端协议测试与本机实时调度验收。
+- 修复旧版 Swift 编译器中测试代码的 Data 初始化歧义。
+
 ## 0.3.0
 
 - 提供面向分发的 Universal Mac App，包含 Apple Silicon 与 Intel 两种架构，最低系统版本为 macOS 13。Apple Silicon 已实际运行验证，Intel 实机兼容性仍待验证。

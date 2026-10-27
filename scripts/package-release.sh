@@ -4,7 +4,7 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h:h}"
 cd "$project_root"
-version="${VERSION:-0.3.0}"
+version="${VERSION:-0.3.1}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 dist_dir="${DIST_DIR:-$project_root/dist}"
@@ -22,7 +22,7 @@ for argument in "$@"; do
   esac
 done
 if [[ ! "$version" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
-  print -u2 -- "VERSION must have the form 0.3.0."; exit 2
+  print -u2 -- "VERSION must have the form 0.3.1."; exit 2
 fi
 if [[ -n "${NOTARY_PROFILE:-}" && -z "${SIGNING_IDENTITY:-}" ]]; then
   print -u2 -- "NOTARY_PROFILE requires a Developer ID SIGNING_IDENTITY."; exit 2
@@ -70,7 +70,7 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
 fi
 ln -s /Applications "$task_package_stage/dmg/Applications"
 ditto --norsrc --noextattr docs/INSTALL.md "$task_package_stage/dmg/安装说明.md"
-asset_base="准点点击器-$version-universal"
+asset_base="PunctualClicker-$version-macOS-universal"
 dmg="$dist_dir/$asset_base.dmg"
 zip="$dist_dir/$asset_base.zip"
 # Replacing these generated release assets does not alter installed applications.

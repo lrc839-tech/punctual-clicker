@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 0.3.0)
+        description: Release version (for example 0.3.1)
         required: true
-        default: 0.3.0
+        default: 0.3.1
   push:
     branches: [main]
     paths:
@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '0.3.0' }}
+      VERSION: ${{ inputs.version || '0.3.1' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
