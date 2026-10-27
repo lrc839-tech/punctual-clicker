@@ -1,0 +1,62 @@
+name: Build and publish macOS package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example 0.3.0)
+        required: true
+        default: 0.3.0
+  push:
+    branches: [main]
+    paths: [.github/workflows/release.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version || '0.3.0' }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run regression tests
+        run: ./run-tests.sh
+      - name: Build standalone Universal packages
+        run: ./scripts/package-release.sh
+      - name: Verify bundled resources and native HTTP service
+        run: |
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin build/准点点击器.app/Contents/MacOS/PunctualClicker --distribution-self-test
+          (cd dist && shasum -a 256 -c SHA256SUMS)
+      - name: Publish downloadable release
+        shell: bash
+        run: |
+          cat > release-notes.md <<'NOTES'
+          下载下方 Assets 中的 **DMG（推荐）或 ZIP**，打开后将「准点点击器」拖到「应用程序」。不需要 AI、Python、Node.js、Xcode 或额外运行环境。Source code 是源码，不是安装包。
+
+          功能包括 NTP 北京时间校准、整分定时、圈选位置、点击频率和次数、延迟补偿、Esc 停止，以及内置原生手机校准服务。
+
+          **首次打开：** 当前为 ad-hoc 签名，未使用 Developer ID 签名或 Apple 公证。首次下载后，macOS 可能要求使用者在「系统设置 → 隐私与安全性」确认仍要打开，并亲自开启辅助功能权限。详见仓库 docs/INSTALL.md。
+
+          本版在 GitHub 的 macOS Intel runner 从源码构建 Universal App，运行回归测试及无外部运行时的内置资源／HTTP 自检；Apple Silicon 已在开发机运行验证。真实全新 Mac 的安装和 Gatekeeper 流程仍需由接收者完成。软件不保证 ±1 毫秒或任何第三方业务结果。
+
+          SHA256SUMS 用于核对安装包，release-manifest.json 记录架构和签名／公证状态。
+          NOTES
+          printf '\nSource commit: `%s`\n' "$GITHUB_SHA" >> release-notes.md
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace published assets.' >&2
+            exit 1
+          fi
+          gh release create "v$VERSION" --target "$GITHUB_SHA" \
+            --title "准点点击器 $VERSION · 独立安装包" --notes-file release-notes.md \
+            dist/*.dmg dist/*.zip dist/SHA256SUMS dist/release-manifest.json
