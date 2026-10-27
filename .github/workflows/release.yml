@@ -36,8 +36,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Run regression tests
-        run: ./run-tests.sh
+      - name: Run protocol and NTP regression tests
+        # The real-time scheduler benchmark belongs on a controlled local Mac.
+        # Shared hosted runners can be descheduled beyond the tool's late-stop
+        # threshold; that is not an input-delivery accuracy acceptance test.
+        run: |
+          mkdir -p .build
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/CalibrationServer.swift Tests/CalibrationServerTests.swift -framework Network -o .build/CalibrationServerTests
+          .build/CalibrationServerTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/NetworkTime.swift Tests/NetworkTimeTests.swift -framework ApplicationServices -o .build/NetworkTimeTests
+          .build/NetworkTimeTests
+          python3 -m unittest discover -s Calibration -p test_server.py -v
       - name: Build standalone Universal packages
         run: ./scripts/package-release.sh
       - name: Verify bundled resources and native HTTP service
