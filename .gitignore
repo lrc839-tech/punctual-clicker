@@ -1,0 +1,35 @@
+# Build outputs and distributable artifacts (attach them to GitHub Releases).
+/.build/
+/build/
+/dist/
+*.app/
+*.dmg
+*.pkg
+
+# Local runtime reports can include timestamps, window titles and network details.
+/Reports/
+/reports/
+*.log
+
+# macOS, Python and local editor artifacts.
+.DS_Store
+._*
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+*.swp
+*.tmp
+
+# Never commit signing material, credentials or local environment files.
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+*.cer
