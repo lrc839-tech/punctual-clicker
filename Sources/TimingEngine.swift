@@ -39,6 +39,9 @@ struct ClickConfiguration {
     var holdMs: Double
     /// Stop instead of replaying an excessively overdue action.
     var maximumLatenessMs: Double = 50
+    /// Empty keeps the fixed point used by calibration. One or two regions randomize
+    /// normal clicks; two regions alternate A, B, A, B at the total frequencyHz.
+    var regions: [CGRect] = []
 }
 
 /// A trusted epoch mapped to the monotonic clock. Kept separate from the raw
@@ -67,6 +70,8 @@ struct ClickEvent: Codable {
     let mouseUpWallEpoch: Double
     let pointX: Double
     let pointY: Double
+    /// Zero-based selected region; nil denotes fixed-point calibration.
+    var regionIndex: Int? = nil
 
     var downLatenessMs: Double {
         PrecisionClock.signedMilliseconds(mouseDownCallStartMonoNs, plannedMouseDownMonoNs)
@@ -110,7 +115,11 @@ enum ClickEngineError: LocalizedError {
 /// A sender is injectable so scheduler tests never click any real application.
 final class ClickEngine: @unchecked Sendable {
     typealias Sender = (ClickPhase, CGPoint, Int) throws -> Void
-    typealias Validator = () -> Bool
+    typealias Validator = (CGPoint) -> Bool
+    private struct PlannedClick {
+        let point: CGPoint
+        let regionIndex: Int?
+    }
     private let sender: Sender
     private let validator: Validator?
     private let lock = NSLock()
@@ -143,6 +152,18 @@ final class ClickEngine: @unchecked Sendable {
                onEvent: @escaping (ClickEvent) -> Void,
                onComplete: @escaping (ClickCompletion) -> Void) throws {
         try Self.validate(config)
+        // Randomness is prepared before taking the scheduling anchor. No random-number
+        // generation is performed when a click reaches its precise send deadline.
+        let positions = (0..<config.count).map { offset -> PlannedClick in
+            guard !config.regions.isEmpty else {
+                return PlannedClick(point: config.point, regionIndex: nil)
+            }
+            let regionIndex = offset % config.regions.count
+            let region = config.regions[regionIndex]
+            let x = min(CGFloat.random(in: region.minX..<region.maxX), region.maxX.nextDown)
+            let y = min(CGFloat.random(in: region.minY..<region.maxY), region.maxY.nextDown)
+            return PlannedClick(point: CGPoint(x: x, y: y), regionIndex: regionIndex)
+        }
         let anchor = PrecisionClock.anchor()
         if let reference = timeReference, !reference.epoch.isFinite {
             throw ClickEngineError.invalid("授时时间基准无效。")
@@ -166,7 +187,7 @@ final class ClickEngine: @unchecked Sendable {
 
         let worker = Thread { [self] in
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
-            execute(config, runID: runID, anchorWall: anchor.wall, anchorMono: nowMono,
+            execute(config, positions: positions, runID: runID, anchorWall: anchor.wall, anchorMono: nowMono,
                     schedulingReference:schedulingReference,
                     onEvent: onEvent, onComplete: onComplete)
         }
@@ -209,6 +230,17 @@ final class ClickEngine: @unchecked Sendable {
         guard (1...1000).contains(config.maximumLatenessMs) else {
             throw ClickEngineError.invalid("最大迟到阈值必须在 1～1000 毫秒之间。")
         }
+        guard config.regions.count <= 2 else {
+            throw ClickEngineError.invalid("最多支持两个点击区域。")
+        }
+        for region in config.regions {
+            let dimensions = [region.origin.x, region.origin.y, region.size.width, region.size.height,
+                              region.minX, region.maxX, region.minY, region.maxY]
+            guard dimensions.allSatisfy({ $0.isFinite }), region.size.width > 0, region.size.height > 0,
+                  region.maxX > region.minX, region.maxY > region.minY else {
+                throw ClickEngineError.invalid("点击区域必须是宽高大于 0 的有效矩形。")
+            }
+        }
     }
 
     private enum WaitResult { case ready, cancelled, clockChanged }
@@ -243,7 +275,7 @@ final class ClickEngine: @unchecked Sendable {
         }
     }
 
-    private func execute(_ config: ClickConfiguration, runID: UUID,
+    private func execute(_ config: ClickConfiguration, positions: [PlannedClick], runID: UUID,
                          anchorWall: Double, anchorMono: UInt64,
                          schedulingReference: ClickTimeReference,
                          onEvent: (ClickEvent) -> Void,
@@ -255,6 +287,7 @@ final class ClickEngine: @unchecked Sendable {
         var sent = 0
         var pressed = false
         var currentIndex = 0
+        var currentPoint = config.point
         var completion = ClickCompletion(reason: "completed", sentCount: 0, cancelled: false, error: nil)
 
         func finish(_ reason: String, _ error: String? = nil) {
@@ -265,7 +298,7 @@ final class ClickEngine: @unchecked Sendable {
         defer {
             if pressed {
                 do {
-                    try sender(.mouseUp, config.point, currentIndex)
+                    try sender(.mouseUp, currentPoint, currentIndex)
                     completion.emergencyReleasePerformed = true
                 } catch {
                     let releaseError = "紧急释放鼠标失败：\(error.localizedDescription)；请手动释放鼠标并核对当前操作结果。"
@@ -282,6 +315,8 @@ final class ClickEngine: @unchecked Sendable {
 
         for index in 1...config.count {
             currentIndex = index
+            let position = positions[index - 1]
+            currentPoint = position.point
             // Derive every deadline from the original anchor, never from the previous actual click.
             let targetNs = UInt64(firstTarget + Double(index - 1) * intervalNs)
             let upNs = UInt64(Double(targetNs) - compensationNs)
@@ -291,7 +326,7 @@ final class ClickEngine: @unchecked Sendable {
             case .clockChanged: finish("clockChanged", "系统时钟或睡眠状态发生变化，任务已停止，请重新校时并设置。"); return
             case .ready: break
             }
-            if validator?() == false {
+            if validator?(currentPoint) == false {
                 finish("targetChanged", "目标窗口已改变，任务已停止。"); return
             }
             let downStart = PrecisionClock.nowNs()
@@ -305,7 +340,7 @@ final class ClickEngine: @unchecked Sendable {
             }
             let downWall = PrecisionClock.wallNow()
             do {
-                try sender(.mouseDown, config.point, index)
+                try sender(.mouseDown, currentPoint, index)
                 pressed = true
                 let downEnd = PrecisionClock.nowNs()
                 // Preserve at least 0.5ms of actual press duration if down posting itself was late.
@@ -317,7 +352,7 @@ final class ClickEngine: @unchecked Sendable {
                 }
                 let upStart = PrecisionClock.nowNs()
                 let upWall = PrecisionClock.wallNow()
-                try sender(.mouseUp, config.point, index)
+                try sender(.mouseUp, currentPoint, index)
                 pressed = false
                 let upEnd = PrecisionClock.nowNs()
                 sent += 1
@@ -331,7 +366,8 @@ final class ClickEngine: @unchecked Sendable {
                                        mouseUpCallStartMonoNs: upStart,
                                        mouseUpCallEndMonoNs: upEnd,
                                        mouseDownWallEpoch: downWall, mouseUpWallEpoch: upWall,
-                                       pointX: config.point.x, pointY: config.point.y)
+                                       pointX: currentPoint.x, pointY: currentPoint.y,
+                                       regionIndex: position.regionIndex)
                 onEvent(event)
                 // Release is essential, but a late release must not cause the next click to catch up.
                 if event.upLatenessMs > permittedLateness {

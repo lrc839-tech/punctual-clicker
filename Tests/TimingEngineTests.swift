@@ -59,6 +59,24 @@ enum TimingEngineTests {
                 } catch is ClickEngineError { }
             }
         }
+        try check("拒绝无效区域、溢出边界和过多区域") {
+            let good = CGRect(x: -100, y: 20, width: 30, height: 40)
+            let invalidRegions: [[CGRect]] = [
+                [.zero], [CGRect(x: 1, y: 2, width: -3, height: 4)],
+                [CGRect(x: 1, y: 2, width: 3, height: 0)],
+                [CGRect(x: CGFloat.nan, y: 2, width: 3, height: 4)],
+                [CGRect(x: 1, y: 2, width: CGFloat.infinity, height: 4)],
+                [CGRect(x: CGFloat.greatestFiniteMagnitude, y: 2,
+                        width: CGFloat.greatestFiniteMagnitude, height: 4)],
+                [CGRect(x: 1, y: 2, width: CGFloat.leastNonzeroMagnitude, height: 4)],
+                [good, good, good]
+            ]
+            for regions in invalidRegions {
+                var config = configuration(); config.regions = regions
+                do { try ClickEngine.validate(config); throw TestFailure(description: "无效区域被接受") }
+                catch is ClickEngineError { }
+            }
+        }
         try check("固定节拍、点击数量与补偿含义") {
             var phases: [(ClickPhase, Int)] = []
             let engine = ClickEngine(sender: { phase, _, index in phases.append((phase, index)) })
@@ -71,6 +89,8 @@ enum TimingEngineTests {
                 try expect(phase.1 == position / 2 + 1, "序号错误")
             }
             for (position, event) in events.enumerated() {
+                try expect(event.regionIndex == nil && event.pointX == 30 && event.pointY == 40,
+                           "固定点校准坐标发生改变")
                 try expect(abs(PrecisionClock.signedMilliseconds(event.targetMonoNs,
                             event.plannedMouseUpMonoNs) - 15) < 0.001, "补偿方向错误")
                 try expect(abs(PrecisionClock.signedMilliseconds(event.plannedMouseUpMonoNs,
@@ -80,6 +100,67 @@ enum TimingEngineTests {
                                 events[position - 1].targetMonoNs) - 50) < 0.001, "计划节拍发生漂移")
                 }
             }
+        }
+        try check("单区域每次随机且按下释放与日志坐标一致") {
+            let region = CGRect(x: -230, y: 70, width: 90, height: 60)
+            var config = configuration(after: 0.15, frequency: 25, count: 12)
+            config.regions = [region]
+            var phases: [(ClickPhase, CGPoint, Int)] = []
+            let engine = ClickEngine(sender: { phases.append(($0, $1, $2)) })
+            let (events, result) = try awaitCompletion(engine, config)
+            try expect(result.reason == "completed" && events.count == 12, "单区域随机点击次数错误")
+            var points = Set<String>()
+            for (offset, event) in events.enumerated() {
+                let point = CGPoint(x: event.pointX, y: event.pointY)
+                try expect(region.contains(point) && point.x < region.maxX && point.y < region.maxY,
+                           "随机坐标落在区域外")
+                try expect(event.regionIndex == 0, "单区域日志错误")
+                let down = phases[offset * 2], up = phases[offset * 2 + 1]
+                try expect(down.0 == .mouseDown && up.0 == .mouseUp && down.1 == point && up.1 == point &&
+                           down.2 == event.index && up.2 == event.index, "按下释放坐标不同或日志未记录实际坐标")
+                points.insert("\(event.pointX),\(event.pointY)")
+            }
+            try expect(points.count > 1, "重复使用同一个落点")
+        }
+        try check("双区域交替从A开始且奇偶总次数与总频率不翻倍") {
+            let regions = [CGRect(x: 50, y: 60, width: 30, height: 40),
+                           CGRect(x: 200, y: -100, width: 40, height: 30)]
+            for count in [6, 7] {
+                var config = configuration(after: 0.15, frequency: 20, count: count)
+                config.regions = regions
+                let (events, result) = try awaitCompletion(ClickEngine(sender: { _, _, _ in }), config)
+                try expect(result.reason == "completed" && result.sentCount == count && events.count == count,
+                           "双区域把总次数当作轮数")
+                try expect(events.filter { $0.regionIndex == 0 }.count == (count + 1) / 2 &&
+                           events.filter { $0.regionIndex == 1 }.count == count / 2, "奇偶次数分配错误")
+                for (offset, event) in events.enumerated() {
+                    let expected = offset % 2
+                    try expect(event.regionIndex == expected &&
+                               regions[expected].contains(CGPoint(x: event.pointX, y: event.pointY)),
+                               "双区域未按 A/B 交替或坐标越界")
+                    if offset > 0 {
+                        try expect(abs(PrecisionClock.signedMilliseconds(event.targetMonoNs,
+                                   events[offset - 1].targetMonoNs) - 50) < 0.001,
+                                   "双区域将总频率当作每个区域频率")
+                    }
+                }
+            }
+        }
+        try check("目标保护检查当前实际随机落点") {
+            let regions = [CGRect(x: 50, y: 60, width: 30, height: 40),
+                           CGRect(x: 200, y: -100, width: 40, height: 30)]
+            var config = configuration(after: 0.15, frequency: 20, count: 5)
+            config.regions = regions
+            var checked: [CGPoint] = [], sent: [CGPoint] = []
+            let engine = ClickEngine(sender: { _, point, _ in sent.append(point) }, validator: { point in
+                checked.append(point); return regions[0].contains(point)
+            })
+            let (events, result) = try awaitCompletion(engine, config)
+            try expect(result.reason == "targetChanged" && result.sentCount == 1 && events.count == 1,
+                       "B区域保护失败后仍点击")
+            try expect(checked.count == 2 && regions[0].contains(checked[0]) && regions[1].contains(checked[1]),
+                       "保护检查未使用当前实际落点")
+            try expect(sent.count == 2 && sent.allSatisfy { $0 == checked[0] }, "保护失败仍有鼠标事件")
         }
         try check("授时锚点纠正快慢，且不污染系统时钟跳变检测") {
             for offset in [-5.0,5.0] {
@@ -118,19 +199,25 @@ enum TimingEngineTests {
         try check("按下后取消仍释放鼠标") {
             let pressed = DispatchSemaphore(value: 0)
             let done = DispatchSemaphore(value: 0)
-            var phases: [ClickPhase] = []
+            var phases: [ClickPhase] = [], points: [CGPoint] = []
             var completion: ClickCompletion?
-            let engine = ClickEngine(sender: { phase, _, _ in
+            let engine = ClickEngine(sender: { phase, point, _ in
                 phases.append(phase)
+                points.append(point)
                 if phase == .mouseDown { pressed.signal() }
             })
-            try engine.start(configuration(after: 0.4, hold: 200), onEvent: { _ in }, onComplete: {
+            var config = configuration(after: 0.4, hold: 200)
+            let region = CGRect(x: -200, y: -100, width: 30, height: 40)
+            config.regions = [region]
+            try engine.start(config, onEvent: { _ in }, onComplete: {
                 completion = $0; done.signal()
             })
             try expect(pressed.wait(timeout: .now() + 1) == .success, "未收到按下")
             engine.cancel()
             try expect(done.wait(timeout: .now() + 0.2) == .success, "按下后取消超时")
             try expect(phases == [.mouseDown, .mouseUp], "取消造成鼠标未释放")
+            try expect(points.count == 2 && points[0] == points[1] && region.contains(points[0]),
+                       "紧急释放没有使用按下的随机坐标")
             try expect(completion?.emergencyReleasePerformed == true && completion?.sentCount == 0,
                        "按下后取消必须报告紧急释放，不能把当前次描述为未发生")
         }
@@ -154,7 +241,7 @@ enum TimingEngineTests {
         }
         try check("目标保护失败不点击") {
             var sent = 0
-            let engine = ClickEngine(sender: { _, _, _ in sent += 1 }, validator: { false })
+            let engine = ClickEngine(sender: { _, _, _ in sent += 1 }, validator: { _ in false })
             let (_, result) = try awaitCompletion(engine, configuration())
             try expect(result.reason == "targetChanged" && sent == 0, "目标改变后仍发出点击")
         }

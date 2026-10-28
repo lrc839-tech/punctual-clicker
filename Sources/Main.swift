@@ -95,23 +95,22 @@ private func targetAt(_ point: CGPoint) -> TargetWindow? {
 }
 final class GuardState: @unchecked Sendable {
     private let lock = NSLock(); private var valid = false; private var updated: UInt64 = 0
-    private var selected: TargetWindow?; private var point: CGPoint?
-    func configure(_ target: TargetWindow, point: CGPoint) {
-        lock.lock(); selected = target; self.point = point; lock.unlock()
+    private var selected: TargetWindow?
+    func configure(_ target: TargetWindow) {
+        lock.lock(); selected = target; lock.unlock()
     }
     func set(_ value: Bool) { lock.lock(); valid = value; updated = PrecisionClock.nowNs(); lock.unlock() }
-    func check() -> Bool {
+    func check(at location: CGPoint) -> Bool {
         lock.lock()
         let fresh = valid && PrecisionClock.nowNs() - updated < 250_000_000
-        let t = selected, p = point
+        let t = selected
         lock.unlock()
-        guard fresh, let target = t, let location = p else { return false }
+        guard fresh, let target = t, target.frame.contains(location) else { return false }
         // Check actual occlusion immediately before each down, including same-app dialogs.
         for info in windowList() {
             let layer = info[kCGWindowLayer as String] as? Int ?? 0
             guard (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
-                  let w = metadata(info), w.frame.contains(location),
-                  layer == 0 || (layer > 0 && w.pid == target.pid) else { continue }
+                  let w = metadata(info), w.frame.contains(location),layer >= 0 else { continue }
             return w.id == target.id && w.frame == target.frame
         }
         return false
@@ -120,19 +119,17 @@ final class GuardState: @unchecked Sendable {
 
 final class SelectView: NSView {
     var start: CGPoint?; var current: CGPoint?
-    var finish: ((CGPoint) -> Void)?
+    var regionName = "A"
+    var finish: ((CGRect?) -> Void)?
     override var acceptsFirstResponder: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.30).setFill(); bounds.fill()
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 23), .foregroundColor: NSColor.white]
-        "拖框圈选点击位置，松手取中心 · Esc 取消".draw(at: CGPoint(x: 45, y: bounds.height - 70), withAttributes: attrs)
+        "拖框圈选区域 \(regionName)，每次在框内随机点击 · Esc 取消".draw(at: CGPoint(x: 45, y: bounds.height - 70), withAttributes: attrs)
         if let a = start, let b = current {
-            let r = CGRect(x: min(a.x,b.x), y: min(a.y,b.y), width: max(abs(a.x-b.x),4), height: max(abs(a.y-b.y),4))
+            let r = CGRect(x: min(a.x,b.x), y: min(a.y,b.y), width: abs(a.x-b.x), height: abs(a.y-b.y))
             NSColor.systemCyan.withAlphaComponent(0.22).setFill(); r.fill()
             NSColor.systemCyan.setStroke(); let p = NSBezierPath(rect: r); p.lineWidth = 2; p.stroke()
-            let c = CGPoint(x:r.midX,y:r.midY); let cross = NSBezierPath()
-            cross.move(to: CGPoint(x:c.x-10,y:c.y)); cross.line(to: CGPoint(x:c.x+10,y:c.y))
-            cross.move(to: CGPoint(x:c.x,y:c.y-10)); cross.line(to: CGPoint(x:c.x,y:c.y+10)); cross.stroke()
         }
     }
     override func mouseDown(with event: NSEvent) { start = convert(event.locationInWindow, from:nil); current = start; needsDisplay = true }
@@ -140,11 +137,13 @@ final class SelectView: NSView {
     override func mouseUp(with event: NSEvent) {
         guard let a = start, let w = window else { return }
         let b = convert(event.locationInWindow, from:nil)
-        finish?(cgPoint(w.convertPoint(toScreen: CGPoint(x:(a.x+b.x)/2,y:(a.y+b.y)/2))))
+        let first = cgPoint(w.convertPoint(toScreen:a)), last = cgPoint(w.convertPoint(toScreen:b))
+        finish?(CGRect(x:min(first.x,last.x),y:min(first.y,last.y),width:abs(first.x-last.x),height:abs(first.y-last.y)))
     }
-    override func keyDown(with event: NSEvent) { if event.keyCode == 53 { finish?(CGPoint(x: CGFloat.nan, y: CGFloat.nan)) } }
+    override func keyDown(with event: NSEvent) { if event.keyCode == 53 { finish?(nil) } }
 }
 final class OverlayWindow: NSWindow { override var canBecomeKey: Bool { true } }
+final class FlippedDocumentView: NSView { override var isFlipped: Bool { true } }
 
 final class ReceiverView: NSView {
     var onReceive: ((Int, UInt64) -> Void)?
@@ -166,14 +165,18 @@ final class ReceiverView: NSView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     var window: NSWindow!
     var overlays: [NSWindow] = []
     var receiverWindow: NSWindow?; var receiverView: ReceiverView?
     let targetField = minutePicker()
     let freqField = field("5",width:65), countField = field("1",width:70)
     let compensationField = field("0",width:85), holdField = field("8",width:65)
-    let pointLabel = textLabel("尚未选择位置",color:.secondaryLabelColor)
+    let pointLabel = textLabel("A：尚未框选",color:.secondaryLabelColor)
+    let secondPointLabel = textLabel("B：尚未框选",color:.secondaryLabelColor)
+    let clickPlanLabel = textLabel("",size:12,color:.secondaryLabelColor)
+    var regionMode: NSSegmentedControl!
+    var secondPickButton: NSButton!
     let permissionLabel = textLabel("",color:.secondaryLabelColor)
     let statusLabel = textLabel("待设置",size:15,color:.systemTeal,bold:true)
     let calibrationLabel = textLabel("尚无实测数据；补偿以 mouseUp 到达为准",color:.secondaryLabelColor)
@@ -193,9 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var startButton: NSButton!, stopButton: NSButton!
     var controls: [NSControl] = []
     var point: CGPoint?; var targetWindow: TargetWindow?
+    var regionA: CGRect?; var regionB: CGRect?
+    var usesTwoRegions: Bool { regionMode?.selectedSegment == 1 }
     let guardState = GuardState()
-    lazy var engine = ClickEngine(validator: { [weak self] in
-        guard let self = self, self.guardState.check() else { return false }
+    lazy var engine = ClickEngine(validator: { [weak self] location in
+        guard let self = self, self.guardState.check(at:location) else { return false }
         if let snapshot = self.activeNetworkTime {
             return snapshot.isUsable(atMonoNs:PrecisionClock.nowNs())
         }
@@ -261,16 +266,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app.submenu = sub; main.addItem(app); NSApplication.shared.mainMenu = main
     }
     func buildUI() {
-        window = NSWindow(contentRect:NSRect(x:120,y:120,width:890,height:790),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title = "准点点击器"; window.minSize = NSSize(width:890,height:770); window.delegate = self
+        let visibleHeight = NSScreen.main?.visibleFrame.height ?? 920
+        window = NSWindow(contentRect:NSRect(x:120,y:120,width:890,height:min(880,visibleHeight-50)),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
+        window.title = "准点点击器"; window.minSize = NSSize(width:890,height:620); window.delegate = self
         window.isReleasedWhenClosed = false
         let root = window.contentView!; root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         let header = textLabel("准点点击",size:30,bold:true)
-        let desc = textLabel("圈选位置 → 测量延迟 → 设置北京时间。NTP 授时与点击延迟分别校准。",color:.secondaryLabelColor)
+        let desc = textLabel("框选按钮区域 → 设置北京时间。每次在区域内随机落点，支持 A、B 轮流点击。",color:.secondaryLabelColor)
         syncButton = button("校准北京时间 · NTP",#selector(syncNetworkTime))
         networkStatusLabel.preferredMaxLayoutWidth = 825
-        let pick = button("① 圈选点击位置",#selector(selectPosition))
+        regionMode = NSSegmentedControl(labels:["单区域","双区域轮流"],trackingMode:.selectOne,target:self,action:#selector(regionModeChanged))
+        regionMode.selectedSegment = 0
+        let pick = button("框选区域 A",#selector(selectPosition))
+        secondPickButton = button("框选区域 B",#selector(selectSecondPosition))
         let future = button("下一个整分",#selector(setFuture))
         let local = button("② 本机校准 · 30 次",#selector(localCalibration))
         let validate = button("本机验证补偿",#selector(localValidation))
@@ -282,18 +291,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let permission = button("开启辅助功能权限",#selector(requestPermission))
         startButton = button("开始等待并点击",#selector(startNormal)); startButton.bezelColor = .systemTeal
         stopButton = button("立即停止 · Esc",#selector(stop)); stopButton.isEnabled = false
-        controls = [targetField,freqField,countField,compensationField,holdField,pick,future,local,validate,phone,phoneBase,phoneValid,apply]
+        controls = [targetField,freqField,countField,compensationField,holdField,regionMode,pick,secondPickButton,future,local,validate,phone,phoneBase,phoneValid,apply]
+        freqField.delegate = self; countField.delegate = self
+        clickPlanLabel.preferredMaxLayoutWidth = 825
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
         logView.isEditable = false; logView.isSelectable = true; logView.font = .monospacedSystemFont(ofSize:11,weight:.regular)
         logView.textContainerInset = NSSize(width:10,height:9); scroll.documentView = logView
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant:125).isActive = true
-        scroll.widthAnchor.constraint(equalToConstant:825).isActive = true
         let items: [NSView] = [
             row([header, statusLabel]), desc, row([clockLabel,syncButton]), networkStatusLabel,
             row([permissionLabel,permission]),
+            row([textLabel("点击模式"),regionMode,textLabel("两个区域需在同一窗口内",size:12,color:.secondaryLabelColor)]),
             row([pick,pointLabel]),
+            row([secondPickButton,secondPointLabel]),
             row([textLabel("北京时间"),targetField,future,textLabel("秒固定为 00",size:12,color:.secondaryLabelColor)]),
-            row([textLabel("点击频率"),freqField,textLabel("次/秒"),textLabel("总次数"),countField,textLabel("次"),textLabel("按住"),holdField,textLabel("毫秒")]),
+            row([textLabel("总频率"),freqField,textLabel("次/秒"),textLabel("总点击数"),countField,textLabel("次"),textLabel("按住"),holdField,textLabel("毫秒")]),
+            clickPlanLabel,
             row([textLabel("提前补偿"),compensationField,textLabel("毫秒（正数提前，负数延后）"),apply]),
             row([local,validate,phone]),
             row([phoneBase,phoneValid,readPhone]), calibrationLabel,
@@ -301,11 +314,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             textLabel("圈选后固定窗口位置与大小。切换目标应用、移动窗口或休眠会停止任务。",size:12,color:.secondaryLabelColor),
             scroll
         ]
-        let stack = column(items,spacing:13); stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:28),stack.topAnchor.constraint(equalTo:root.topAnchor,constant:24),stack.trailingAnchor.constraint(lessThanOrEqualTo:root.trailingAnchor,constant:-24),stack.bottomAnchor.constraint(equalTo:root.bottomAnchor,constant:-22)])
+        // Keep all controls reachable on smaller laptop displays after adding the B row.
+        let formScroll = NSScrollView(); formScroll.hasVerticalScroller = true
+        formScroll.drawsBackground = false; formScroll.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(formScroll)
+        let document = FlippedDocumentView(); document.translatesAutoresizingMaskIntoConstraints = false
+        formScroll.documentView = document
+        let stack = column(items,spacing:13); stack.translatesAutoresizingMaskIntoConstraints = false; document.addSubview(stack)
+        NSLayoutConstraint.activate([
+            formScroll.leadingAnchor.constraint(equalTo:root.leadingAnchor),formScroll.trailingAnchor.constraint(equalTo:root.trailingAnchor),
+            formScroll.topAnchor.constraint(equalTo:root.topAnchor),formScroll.bottomAnchor.constraint(equalTo:root.bottomAnchor),
+            document.widthAnchor.constraint(equalTo:formScroll.contentView.widthAnchor),
+            document.heightAnchor.constraint(greaterThanOrEqualTo:formScroll.contentView.heightAnchor),
+            stack.leadingAnchor.constraint(equalTo:document.leadingAnchor,constant:28),stack.topAnchor.constraint(equalTo:document.topAnchor,constant:24),
+            stack.trailingAnchor.constraint(equalTo:document.trailingAnchor,constant:-24),stack.bottomAnchor.constraint(equalTo:document.bottomAnchor,constant:-22),
+            scroll.widthAnchor.constraint(equalTo:stack.widthAnchor)
+        ])
         setFuture(); initialTargetSuggestion = targetField.dateValue.timeIntervalSince1970
+        updateRegionControls()
         refresh(); window.center(); window.makeKeyAndOrderFront(nil)
         log("点击完成的定义是鼠标抬起（mouseUp）。每次点击按固定节拍调度，过度迟到停止，不集中补发。")
+    }
+    @objc func regionModeChanged() { updateRegionControls() }
+    func controlTextDidChange(_ obj: Notification) { updateClickPlan() }
+    func updateRegionControls() {
+        secondPickButton.isEnabled = usesTwoRegions && !engine.isRunning && pendingNormal == nil
+        secondPointLabel.textColor = usesTwoRegions ? .secondaryLabelColor : .tertiaryLabelColor
+        updateClickPlan()
+    }
+    func updateClickPlan() {
+        guard let frequency = Double(freqField.stringValue),frequency.isFinite,(0.1...100).contains(frequency),
+              let count = Int(countField.stringValue),(1...10000).contains(count) else {
+            clickPlanLabel.stringValue = "总频率填 0.1～100 次/秒，总点击数填 1～10000；次数按每一次点击计算。"; return
+        }
+        let interval = String(format:"%.1f",1000/frequency)
+        let span = String(format:"%.2f",Double(count-1)/frequency)
+        if usesTwoRegions {
+            clickPlanLabel.stringValue = "A → B → A → B；每隔 \(interval) 毫秒点击一次。A \((count+1)/2) 次，B \(count/2) 次，共 \(count) 次；首末点击相隔 \(span) 秒。"
+        } else {
+            clickPlanLabel.stringValue = "每隔 \(interval) 毫秒在 A 内随机点击，共 \(count) 次；首末点击相隔 \(span) 秒。"
+        }
     }
     func refresh() {
         let now = PrecisionClock.nowNs()
@@ -397,6 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pendingNormal = nil; pendingRefreshInFlight = false; activeNetworkTime = nil
         if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
         controls.forEach { $0.isEnabled = true }; startButton.isEnabled = true; stopButton.isEnabled = false
+        updateRegionControls()
         statusLabel.stringValue = "已停止"; log(message)
     }
     private func preparePending(_ task:PendingNormalTask,snapshot:NetworkTimeSnapshot) {
@@ -442,27 +491,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
         log("在系统设置中开启“准点点击器”的辅助功能权限，然后回到此窗口；无需输入账户密码给本工具。")
     }
-    @objc func selectPosition() {
+    @objc func selectPosition() { selectRegion(0) }
+    @objc func selectSecondPosition() { selectRegion(1) }
+    func selectRegion(_ slot: Int) {
         guard !engine.isRunning,pendingNormal == nil else { return }
+        guard slot == 0 || usesTwoRegions else { return }
+        if slot == 1 && regionA == nil { fail("请先框选区域 A，再框选同一窗口内的区域 B。"); return }
         for screen in NSScreen.screens {
             let w = OverlayWindow(contentRect:screen.frame,styleMask:.borderless,backing:.buffered,defer:false)
             w.isOpaque = false; w.backgroundColor = .clear; w.level = .screenSaver
             w.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; w.isReleasedWhenClosed = false
             let v = SelectView(frame:CGRect(origin:.zero,size:screen.frame.size))
-            v.finish = { [weak self] p in self?.finishSelection(p) }; w.contentView = v
+            v.regionName = slot == 0 ? "A" : "B"
+            v.finish = { [weak self] rect in self?.finishSelection(rect,slot:slot) }; w.contentView = v
             overlays.append(w); w.makeKeyAndOrderFront(nil); w.makeFirstResponder(v)
         }
     }
+    // Developer CLI compatibility; normal selection always retains the entire rectangle.
     func finishSelection(_ p: CGPoint) {
+        finishSelection(CGRect(x:p.x-1,y:p.y-1,width:2,height:2),slot:0)
+    }
+    func finishSelection(_ rect: CGRect?, slot: Int) {
         overlays.forEach { $0.orderOut(nil) }; overlays.removeAll()
-        guard p.x.isFinite else { return }
+        guard let rect = rect else { return }
+        guard rect.width >= 2,rect.height >= 2 else { fail("请拖动框选至少 2 × 2 点的区域，范围应在可点击按钮内。"); return }
+        let p = CGPoint(x:rect.midX,y:rect.midY)
         DispatchQueue.main.asyncAfter(deadline:.now()+0.1) {
             guard let t = targetAt(p) else { self.fail("该位置没有可识别的应用窗口，请重新圈选。"); return }
-            self.point = p; self.targetWindow = t
-            self.pointLabel.stringValue = String(format:"%@  ·  x %.1f / y %.1f",t.title,p.x,p.y)
-            self.log("已选择 \(t.title)，Quartz 点坐标 (\(Int(p.x)), \(Int(p.y)))。窗口移动或缩放后请重选。")
+            guard t.frame.contains(rect) else { self.fail("整个区域必须位于同一个目标窗口内，请缩小选框。"); return }
+            if slot == 1 {
+                guard let first = self.targetWindow,first.id == t.id,first.frame == t.frame else {
+                    self.fail("A、B 必须位于同一窗口，且窗口位置与大小不能变化。请重新框选。"); return
+                }
+                self.regionB = rect
+                self.secondPointLabel.stringValue = self.regionDescription("B",rect:rect,target:t)
+            } else {
+                if self.targetWindow?.id != t.id || self.targetWindow?.frame != t.frame {
+                    self.regionB = nil; self.secondPointLabel.stringValue = "B：尚未框选"
+                }
+                self.point = p; self.targetWindow = t; self.regionA = rect
+                self.pointLabel.stringValue = self.regionDescription("A",rect:rect,target:t)
+            }
+            self.log("已框选区域 \(slot == 0 ? "A" : "B")：\(t.title)，x \(Int(rect.minX)) / y \(Int(rect.minY))，\(Int(rect.width)) × \(Int(rect.height)) 点。正常任务每次在框内随机落点；校准仍用 A 中心。")
+            self.updateRegionControls()
             self.window.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps:true)
         }
+    }
+    func regionDescription(_ name:String,rect:CGRect,target:TargetWindow) -> String {
+        String(format:"%@：%@ · x %.0f / y %.0f · %.0f × %.0f 点",name,target.title,rect.minX,rect.minY,rect.width,rect.height)
     }
     func config(point: CGPoint, target: Double, count: Int? = nil, compensation: Double? = nil) throws -> ClickConfiguration {
         guard let f = Double(freqField.stringValue),let c = Int(countField.stringValue),let co = Double(compensationField.stringValue),let hold = Double(holdField.stringValue) else { throw ClickEngineError.invalid("频率、次数、补偿和按住时长必须是有效数字。") }
@@ -470,7 +546,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func startNormal() {
         guard !engine.isRunning,pendingNormal == nil else { return }
-        guard let p = point, let t = targetWindow else { fail("先圈选目标按钮的位置。"); return }
+        guard let p = point,let a = regionA,let t = targetWindow else { fail("先框选目标按钮的区域 A。"); return }
+        if usesTwoRegions && regionB == nil { fail("双区域模式需要先框选区域 B。"); return }
         guard window.makeFirstResponder(nil) else { fail("请先完成日期和时分的输入。"); return }
         // NSDatePicker can retain hidden seconds; normalize the actual scheduled
         // value as well as its presentation, so every selected target is :00.000.
@@ -478,7 +555,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         targetField.dateValue = Date(timeIntervalSince1970:epoch)
         do {
             guard AXIsProcessTrusted() else { throw ClickEngineError.invalid("请先开启辅助功能权限。") }
-            let c = try config(point:p,target:epoch); try ClickEngine.validate(c)
+            var c = try config(point:p,target:epoch)
+            c.regions = usesTwoRegions ? [a,regionB!] : [a]
+            try ClickEngine.validate(c)
             let task = PendingNormalTask(configuration:c,target:t); pendingNormal = task; pendingRefreshInFlight = true
             controls.forEach { $0.isEnabled = false }; startButton.isEnabled = false; stopButton.isEnabled = true
             statusLabel.stringValue = "校时 / 准备中"
@@ -536,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         activeTarget = target; activeNetworkTime = networkSnapshot
-        guardState.configure(target,point:c.point); guardState.set(true)
+        guardState.configure(target); guardState.set(true)
         events = []; arrivals = [:]; currentMode = mode; currentRunID = UUID().uuidString
         if mode != "normal" { lastCalibration = nil; calibrationSource = "" }
         if activity == nil { activity = ProcessInfo.processInfo.beginActivity(options:[.userInitiated,.idleSystemSleepDisabled],reason:"定时点击与校准") }
@@ -550,6 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controls.forEach { $0.isEnabled = false }; startButton.isEnabled = false; stopButton.isEnabled = true
         statusLabel.stringValue = "等待 / 执行中"
         log("\(mode) · 目标 \(formatTime(c.targetWallEpoch)) · \(networkSnapshot == nil ? "Mac原始时钟校准路径" : "NTP北京时间") · \(c.frequencyHz) 次/秒 × \(c.count) · 提前 \(c.compensationMs) ms")
+        if !c.regions.isEmpty { log(c.regions.count == 2 ? "A、B 轮流，每次在区域内随机落点；A \((c.count+1)/2) 次，B \(c.count/2) 次。" : "每次在 A 区域内随机落点，共 \(c.count) 次。") }
     }
     @objc func stop() {
         if !overlays.isEmpty { overlays.forEach { $0.orderOut(nil) }; overlays.removeAll() }
@@ -559,6 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func finished(_ completion: ClickCompletion,config:ClickConfiguration) {
         if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
         controls.forEach { $0.isEnabled = true }; startButton.isEnabled = true; stopButton.isEnabled = false
+        updateRegionControls()
         statusLabel.stringValue = completion.error == nil && !completion.cancelled ? "已完成" : "已停止"
         log("发出 \(completion.sentCount)/\(config.count) 次；\(completion.error ?? completion.reason)")
         if completion.reason == "targetChanged" {
@@ -567,10 +648,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if completion.emergencyReleasePerformed { log("停止时另有一次已经按下的鼠标已释放，该次仍可能触发；请核对目标结果。") }
         var report: [String:Any] = ["runId":currentRunID,"mode":currentMode,"createdAt":formatTime(Date().timeIntervalSince1970),"targetWallEpoch":config.targetWallEpoch,"compensationMs":config.compensationMs,"frequencyHz":config.frequencyHz,"count":config.count,"sentCount":completion.sentCount,"receivedCount":arrivals.count,"reason":completion.reason,"accessibilityTrusted":AXIsProcessTrusted()]
+        report["clickPattern"] = config.regions.isEmpty ? "fixed-calibration" : (config.regions.count == 2 ? "alternating-random-A-B" : "random-A")
+        report["regions"] = config.regions.enumerated().map { i,r in ["name":i == 0 ? "A" : "B","x":r.minX,"y":r.minY,"width":r.width,"height":r.height] as [String:Any] }
         report["timeBasis"] = activeNetworkTime == nil ? "Mac raw system epoch for local/phone latency measurement" : "NTP UTC epoch, displayed and parsed in Asia/Shanghai"
         if let snapshot = activeNetworkTime,let data = try? JSONEncoder().encode(snapshot),let object = try? JSONSerialization.jsonObject(with:data) { report["ntpSnapshot"] = object }
         let rows: [[String:Any]] = events.map { e in
             var d: [String:Any] = ["index":e.index,"targetMs":e.targetWallEpoch*1000,"sentUpMs":e.mouseUpWallEpoch*1000,"schedulerErrorMs":e.upLatenessMs,"requestVsTargetMs":e.requestVsTargetMs,"sentUpMonoNs":e.mouseUpCallStartMonoNs]
+            d["pointX"] = e.pointX; d["pointY"] = e.pointY
+            if let slot = e.regionIndex { d["region"] = slot == 0 ? "A" : "B" }
             if let snapshot = activeNetworkTime {
                 d["sentUpNTPMs"] = snapshot.utcEpoch(atMonoNs:e.mouseUpCallStartMonoNs)*1000
                 d["ntpAgeSeconds"] = snapshot.ageSeconds(atMonoNs:e.mouseUpCallStartMonoNs)
