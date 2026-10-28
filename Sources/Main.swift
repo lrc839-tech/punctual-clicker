@@ -733,26 +733,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         try? d.write(to:reports.appendingPathComponent(name),options:.atomic)
     }
     func api(_ path:String,body:[String:Any]? = nil,completion:@escaping ([String:Any]?) -> Void) {
-        var r = URLRequest(url:URL(string:"http://127.0.0.1:18765"+path)!); r.timeoutInterval = 3
+        guard let active = server,active.isRunning,let port = active.boundPort,port > 0 else {
+            completion(nil); return
+        }
+        var r = URLRequest(url:URL(string:"http://127.0.0.1:\(port)"+path)!); r.timeoutInterval = 3
         if let b = body { r.httpMethod = "POST"; r.setValue("application/json",forHTTPHeaderField:"Content-Type"); r.httpBody = try? JSONSerialization.data(withJSONObject:b) }
-        URLSession.shared.dataTask(with:r) { d,_,_ in
-            let json = d.flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] }
-            DispatchQueue.main.async { completion(json) }
+        URLSession.shared.dataTask(with:r) { [weak self] d,response,error in
+            let json = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
+                ? d.flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] } : nil
+            DispatchQueue.main.async {
+                guard let self = self,self.server === active,active.isRunning,active.boundPort == port else {
+                    completion(nil); return
+                }
+                completion(json)
+            }
         }.resume()
     }
     func launchServer(completion:@escaping (Result<Void,Error>) -> Void) {
-        if server?.isRunning == true { completion(.success(())); return }
+        if server?.isRunning == true,let port = server?.boundPort,port > 0 { completion(.success(())); return }
         guard !serverStarting else { return }
         guard let resources = Bundle.main.resourceURL?.appendingPathComponent("Calibration",isDirectory:true) else {
             completion(.failure(ClickEngineError.invalid("安装包缺少手机校准资源，请重新安装。"))); return
         }
         do {
             serverStarting = true
-            let native = try CalibrationHTTPServer(port:18765,resourceRoot:resources,reports:reports)
+            // Let the OS reserve an available port atomically. Never probe then bind
+            // or send calibration requests to a fixed port owned by another app.
+            let native = try CalibrationHTTPServer(port:0,resourceRoot:resources,reports:reports)
             server = native
             native.start { [weak self] result in
-                self?.serverStarting = false
-                if case .failure = result { self?.server = nil }
+                guard let self = self,self.server === native,!self.terminating else { native.stop(); return }
+                self.serverStarting = false
+                if case .failure = result { self.server = nil }
                 completion(result)
             }
         } catch { serverStarting = false; completion(.failure(error)) }
@@ -781,12 +793,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
     }
     func showPhoneHelp() {
-        let url = "http://\(localIP()):18765"
+        guard let active = server,active.isRunning,let port = active.boundPort,port > 0 else {
+            fail("手机校准服务尚未就绪，请重新打开手机镜像校准。"); return
+        }
+        let url = "http://\(localIP()):\(port)"
         let a = NSAlert(); a.messageText = "测量 iPhone 镜像的实际输入延迟"
-        a.informativeText = "1. Mac 与 iPhone 连同一局域网。\n2. 在 iPhone Safari 打开下方网址，完成校时并保持前台。\n3. 锁定手机，打开 Mac 的 iPhone 镜像。\n4. 回到本工具，圈选手机页面的大按钮，再点“镜像采样”。\n5. 采用实测补偿后，再跑“镜像验证补偿”。\n\n\(url)\n\nSafari 测试结果只代表这条镜像测试路径，不代表其他 App 的业务处理延迟。"
+        a.informativeText = "1. Mac 与 iPhone 连同一局域网。\n2. 在 iPhone Safari 打开下方网址，完成校时并保持前台。\n3. 锁定手机，打开 Mac 的 iPhone 镜像。\n4. 回到本工具，圈选手机页面的大按钮，再点“镜像采样”。\n5. 采用实测补偿后，再跑“镜像验证补偿”。\n\n\(url)\n\n端口由系统自动分配，每次重新启动 App 后请使用这里显示的最新网址。\nSafari 测试结果只代表这条镜像测试路径，不代表其他 App 的业务处理延迟。"
         let f = NSTextField(string:url); f.isEditable = false; f.isSelectable = true; f.frame = NSRect(x:0,y:0,width:390,height:25); a.accessoryView = f
         a.addButton(withTitle:"知道了"); a.addButton(withTitle:"在 Mac 查看测试页")
-        if a.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(URL(string:"http://127.0.0.1:18765")!) }
+        if a.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(URL(string:"http://127.0.0.1:\(port)")!) }
         log("内置手机校准服务已启动：\(url)；结果保存在 \(reports.appendingPathComponent("phone-calibration.json").path)")
     }
     @objc func phoneCalibration() { phoneExpectedLatency = nil; runPhone(compensated:false) }
@@ -826,7 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         return .terminateNow
     }
     func applicationWillTerminate(_ notification:Notification) {
-        networkSession = UUID(); pendingNormal = nil
+        terminating = true; networkSession = UUID(); pendingNormal = nil
         engine.cancel(); server?.stop(); timer?.invalidate()
         if let a = activity { ProcessInfo.processInfo.endActivity(a) }
     }

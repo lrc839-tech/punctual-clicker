@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 0.4.1)
+        description: Release version (for example 0.4.2)
         required: true
-        default: 0.4.1
+        default: 0.4.2
   push:
     branches: [main]
     paths:
@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '0.4.1' }}
+      VERSION: ${{ inputs.version || '0.4.2' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -63,7 +63,9 @@ jobs:
 
           新增区域内随机落点，以及同一窗口内 A、B 双区域轮流点击。总频率按全部实际点击数每秒计算，总点击数不是轮数；例如 5 次/秒、5 次为 A → B → A → B → A。延迟校准仍固定使用 A 中心。
 
-          修复程序坞的全屏辅助层被误判为遮挡、导致任务首点前停止的问题；继续检查实际落点的普通窗口与目标应用浮窗遮挡。本机校准只会选择工具自身接收窗口。
+          修复手机校准固定端口与其他程序冲突的问题：服务自动分配空闲端口，本机接口与手机网址使用同一实际端口。每次重启 App 后，请在手机镜像校准帮助窗口查看最新网址。
+
+          保留程序坞辅助层误判修复，以及只选择自身接收窗口的本机校准保护。
 
           继续提供 NTP 北京时间校准、整分定时、延迟补偿、Esc 停止，以及内置原生手机校准服务。运行报告记录区域和实际落点。
 
