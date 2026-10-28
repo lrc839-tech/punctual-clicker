@@ -96,6 +96,9 @@ private func targetAt(_ point: CGPoint) -> TargetWindow? {
 final class GuardState: @unchecked Sendable {
     private let lock = NSLock(); private var valid = false; private var updated: UInt64 = 0
     private var selected: TargetWindow?
+    private var lastIssue = ""
+    var diagnostic: String { lock.lock(); defer { lock.unlock() }; return lastIssue }
+    private func issue(_ message:String) { lock.lock(); lastIssue = message; lock.unlock() }
     func configure(_ target: TargetWindow) {
         lock.lock(); selected = target; lock.unlock()
     }
@@ -105,15 +108,20 @@ final class GuardState: @unchecked Sendable {
         let fresh = valid && PrecisionClock.nowNs() - updated < 250_000_000
         let t = selected
         lock.unlock()
-        guard fresh, let target = t, target.frame.contains(location) else { return false }
-        // Check actual occlusion immediately before each down, including same-app dialogs.
-        for info in windowList() {
-            let layer = info[kCGWindowLayer as String] as? Int ?? 0
-            guard (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
-                  let w = metadata(info), w.frame.contains(location),layer >= 0 else { continue }
-            return w.id == target.id && w.frame == target.frame
+        guard fresh, let target = t, target.frame.contains(location) else {
+            issue("前台／权限／窗口状态校验失败或状态已过期。"); return false
         }
-        return false
+        issue("")
+        let windows = windowList().compactMap { info -> VisibilityWindow? in
+            guard let w = metadata(info) else { return nil }
+            return VisibilityWindow(pid:w.pid,id:w.id,frame:w.frame,
+                                    layer:info[kCGWindowLayer as String] as? Int ?? 0,
+                                    alpha:info[kCGWindowAlpha as String] as? Double ?? 1)
+        }
+        let visible = TargetVisibility.allows(point:location,targetPID:target.pid,targetID:target.id,
+                                             targetFrame:target.frame,windows:windows)
+        if !visible { issue("实际落点被其他普通窗口或目标应用的浮窗挡住，或目标窗口已变化。") }
+        return visible
     }
 }
 
@@ -586,7 +594,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         w.center(); w.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps:true)
         DispatchQueue.main.asyncAfter(deadline:.now()+0.3) {
             let p = cgPoint(w.convertPoint(toScreen:CGPoint(x:215,y:140)))
-            guard let t = targetAt(p) else { self.fail("无法识别本机接收测试窗口。"); return }
+            // A background AX button invocation may not activate the new window.
+            // Never calibrate by clicking another app that happens to cover its center.
+            guard let t = windowList().compactMap(metadata).first(where:{ $0.id == CGWindowID(w.windowNumber) && $0.pid == getpid() }) else {
+                self.fail("无法识别本机接收测试窗口。请保持测试窗口在前台后重试。"); return
+            }
             let epoch = networkSnapshot?.utcEpoch(atMonoNs:PrecisionClock.nowNs()) ?? Date().timeIntervalSince1970
             var c = ClickConfiguration(targetWallEpoch:epoch+1,point:p,frequencyHz:10,count:30,compensationMs:compensated ? (Double(self.compensationField.stringValue) ?? 0) : 0,holdMs:8)
             c.maximumLatenessMs = 100
@@ -645,6 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         if completion.reason == "targetChanged" {
             if let snapshot = activeNetworkTime,!snapshot.isUsable(atMonoNs:PrecisionClock.nowNs()) { log("NTP 授时已过期或质量不合格，停止后续点击。") }
             log("保护信息：目标 \(activeTarget?.title ?? "未知")；当前前台 \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知")。")
+            if !guardState.diagnostic.isEmpty { log("保护诊断：\(guardState.diagnostic)") }
         }
         if completion.emergencyReleasePerformed { log("停止时另有一次已经按下的鼠标已释放，该次仍可能触发；请核对目标结果。") }
         var report: [String:Any] = ["runId":currentRunID,"mode":currentMode,"createdAt":formatTime(Date().timeIntervalSince1970),"targetWallEpoch":config.targetWallEpoch,"compensationMs":config.compensationMs,"frequencyHz":config.frequencyHz,"count":config.count,"sentCount":completion.sentCount,"receivedCount":arrivals.count,"reason":completion.reason,"accessibilityTrusted":AXIsProcessTrusted()]

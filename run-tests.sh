@@ -15,6 +15,12 @@ xcrun swiftc -O -swift-version 5 -parse-as-library \
 
 task_test_status=0
 xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/TargetVisibility.swift Tests/TargetVisibilityTests.swift \
+  -o .build/TargetVisibilityTests -framework ApplicationServices
+if ! .build/TargetVisibilityTests; then
+  task_test_status=1
+fi
+xcrun swiftc -O -swift-version 5 -parse-as-library \
   Sources/CalibrationServer.swift Tests/CalibrationServerTests.swift \
   -o .build/CalibrationServerTests -framework Network
 if ! .build/CalibrationServerTests; then

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 0.4.0)
+        description: Release version (for example 0.4.1)
         required: true
-        default: 0.4.0
+        default: 0.4.1
   push:
     branches: [main]
     paths:
@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '0.4.0' }}
+      VERSION: ${{ inputs.version || '0.4.1' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -42,6 +42,8 @@ jobs:
         # threshold; that is not an input-delivery accuracy acceptance test.
         run: |
           mkdir -p .build
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TargetVisibility.swift Tests/TargetVisibilityTests.swift -framework ApplicationServices -o .build/TargetVisibilityTests
+          .build/TargetVisibilityTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/CalibrationServer.swift Tests/CalibrationServerTests.swift -framework Network -o .build/CalibrationServerTests
           .build/CalibrationServerTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/NetworkTime.swift Tests/NetworkTimeTests.swift -framework ApplicationServices -o .build/NetworkTimeTests
@@ -60,6 +62,8 @@ jobs:
           下载下方 Assets 中的 **DMG（推荐）或 ZIP**，打开后将「准点点击器」拖到「应用程序」。不需要 AI、Python、Node.js、Xcode 或额外运行环境。Source code 是源码，不是安装包。
 
           新增区域内随机落点，以及同一窗口内 A、B 双区域轮流点击。总频率按全部实际点击数每秒计算，总点击数不是轮数；例如 5 次/秒、5 次为 A → B → A → B → A。延迟校准仍固定使用 A 中心。
+
+          修复程序坞的全屏辅助层被误判为遮挡、导致任务首点前停止的问题；继续检查实际落点的普通窗口与目标应用浮窗遮挡。本机校准只会选择工具自身接收窗口。
 
           继续提供 NTP 北京时间校准、整分定时、延迟补偿、Esc 停止，以及内置原生手机校准服务。运行报告记录区域和实际落点。
 
