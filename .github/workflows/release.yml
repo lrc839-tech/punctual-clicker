@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 0.4.2)
+        description: Release version (for example 0.5.0)
         required: true
-        default: 0.4.2
+        default: 0.5.0
   push:
     branches: [main]
     paths:
@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '0.4.2' }}
+      VERSION: ${{ inputs.version || '0.5.0' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -48,6 +48,10 @@ jobs:
           .build/CalibrationServerTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/NetworkTime.swift Tests/NetworkTimeTests.swift -framework ApplicationServices -o .build/NetworkTimeTests
           .build/NetworkTimeTests
+          for test_name in DamaiPlanTests DamaiRunPolicyTests; do
+            xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiPlan.swift Sources/DamaiRunPolicy.swift "Tests/$test_name.swift" -framework ApplicationServices -o ".build/$test_name"
+            ".build/$test_name"
+          done
           python3 -m unittest discover -s Calibration -p test_server.py -v
       - name: Build standalone Universal packages
         run: ./scripts/package-release.sh
@@ -61,15 +65,13 @@ jobs:
           cat > release-notes.md <<'NOTES'
           下载下方 Assets 中的 **DMG（推荐）或 ZIP**，打开后将「准点点击器」拖到「应用程序」。不需要 AI、Python、Node.js、Xcode 或额外运行环境。Source code 是源码，不是安装包。
 
-          新增区域内随机落点，以及同一窗口内 A、B 双区域轮流点击。总频率按全部实际点击数每秒计算，总点击数不是轮数；例如 5 次/秒、5 次为 A → B → A → B → A。延迟校准仍固定使用 A 中心。
+          新增第三种「大麦方案」：在本机使用 macOS Vision 识别所选 iPhone 镜像视口，分别处理购票、确定、努力刷新、立即提交与继续尝试。每次单击后重新观察，忙态等待，缺票／验证／未知弹窗／支付页停止。无需选机型，不按固定坐标盲轮点。
 
-          修复手机校准固定端口与其他程序冲突的问题：服务自动分配空闲端口，本机接口与手机网址使用同一实际端口。每次重启 App 后，请在手机镜像校准帮助窗口查看最新网址。
+          提供只预览、立即启动、整分启动，以及频率／次数／时长上限。另需本人开启屏幕录制权限。首帧模型加载可能十几秒，建议提前预览；视觉识别有额外耗时，不沿用 Safari 毫秒补偿。低清、遮挡和不支持的页面会等待或停止，未证明所有大麦情况或真实抢票成功率。不自动选座、换票档、返回重选、下拉刷新或付款。
 
-          保留程序坞辅助层误判修复，以及只选择自身接收窗口的本机校准保护。
+          保留单区、双区、NTP 北京时间、整分定时、延迟补偿、Esc 停止，以及自动分配端口的原生手机校准服务。
 
-          继续提供 NTP 北京时间校准、整分定时、延迟补偿、Esc 停止，以及内置原生手机校准服务。运行报告记录区域和实际落点。
-
-          **首次打开：** 当前为 ad-hoc 签名，未使用 Developer ID 签名或 Apple 公证。首次下载后，macOS 可能要求使用者在「系统设置 → 隐私与安全性」确认仍要打开，并亲自开启辅助功能权限。详见仓库 docs/INSTALL.md。
+          **首次打开：** 当前为 ad-hoc 签名，未使用 Developer ID 签名或 Apple 公证。首次下载后，macOS 可能要求使用者在「系统设置 → 隐私与安全性」确认仍要打开，并亲自开启辅助功能权限；大麦方案还需屏幕录制权限。详见仓库 docs/INSTALL.md。
 
           本版在 GitHub 的 macOS Intel runner 从源码构建 Universal App，运行回归测试及无外部运行时的内置资源／HTTP 自检；Apple Silicon 已在开发机运行验证。真实全新 Mac 的安装和 Gatekeeper 流程仍需由接收者完成。软件不保证 ±1 毫秒或任何第三方业务结果。
 

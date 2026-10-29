@@ -4,8 +4,8 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h}"
 cd "$project_root"
-version="${VERSION:-0.4.2}"
-build_number="${BUILD_NUMBER:-8}"
+version="${VERSION:-0.5.0}"
+build_number="${BUILD_NUMBER:-9}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 install_requested=false
@@ -46,7 +46,7 @@ sources=(Sources/*.swift)
 for architecture in arm64 x86_64; do
   xcrun swiftc -O -swift-version 5 -target "${architecture}-apple-macosx13.0" \
     -parse-as-library "${sources[@]}" -o "$task_build_stage/PunctualClicker-$architecture" \
-    -framework AppKit -framework ApplicationServices -framework Network
+    -framework AppKit -framework ApplicationServices -framework Network -framework Vision
 done
 xcrun lipo -create "$task_build_stage/PunctualClicker-arm64" "$task_build_stage/PunctualClicker-x86_64" \
   -output "$app/Contents/MacOS/PunctualClicker"

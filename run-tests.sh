@@ -14,6 +14,10 @@ xcrun swiftc -O -swift-version 5 -parse-as-library \
   -o .build/TimingEngineTests -framework ApplicationServices
 
 task_test_status=0
+for test_name in DamaiPlanTests DamaiRunPolicyTests; do
+  xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiPlan.swift Sources/DamaiRunPolicy.swift "Tests/$test_name.swift" -framework ApplicationServices -o ".build/$test_name"
+  if ! ".build/$test_name"; then task_test_status=1; fi
+done
 xcrun swiftc -O -swift-version 5 -parse-as-library \
   Sources/TargetVisibility.swift Tests/TargetVisibilityTests.swift \
   -o .build/TargetVisibilityTests -framework ApplicationServices

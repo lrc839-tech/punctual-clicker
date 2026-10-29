@@ -4,7 +4,7 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h:h}"
 cd "$project_root"
-version="${VERSION:-0.4.2}"
+version="${VERSION:-0.5.0}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 dist_dir="${DIST_DIR:-$project_root/dist}"
