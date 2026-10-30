@@ -4,7 +4,7 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h:h}"
 cd "$project_root"
-version="${VERSION:-0.5.0}"
+version="${VERSION:-0.7.0}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 dist_dir="${DIST_DIR:-$project_root/dist}"
@@ -27,9 +27,19 @@ fi
 if [[ -n "${NOTARY_PROFILE:-}" && -z "${SIGNING_IDENTITY:-}" ]]; then
   print -u2 -- "NOTARY_PROFILE requires a Developer ID SIGNING_IDENTITY."; exit 2
 fi
-if ! $skip_build; then "$project_root/build.sh"; fi
+if ! $skip_build; then VERSION="$version" "$project_root/build.sh" --distribution; fi
 source_app="$output_dir/准点点击器.app"
 [[ -d "$source_app" ]] || { print -u2 -- "Missing app: $source_app"; exit 1; }
+package_channel=$(/usr/libexec/PlistBuddy -c 'Print :PunctualSigningChannel' "$source_app/Contents/Info.plist" 2>/dev/null || true)
+if [[ "$package_channel" == "local-development" ]]; then
+  print -u2 -- "Refusing public packaging of a local development identity. Build with --distribution or a Developer ID identity."
+  exit 3
+fi
+package_signature=$(codesign -dv --verbose=4 "$source_app" 2>&1)
+if [[ "$package_signature" != *"Signature=adhoc"* && "$package_signature" != *"Authority=Developer ID Application:"* ]]; then
+  print -u2 -- "Refusing public packaging of a non-Developer-ID certificate. Local self-signed identities are for internal builds only."
+  exit 3
+fi
 [[ -f docs/INSTALL.md ]] || { print -u2 -- "Missing docs/INSTALL.md"; exit 1; }
 for required_architecture in arm64 x86_64; do
   xcrun lipo "$source_app/Contents/MacOS/PunctualClicker" -verify_arch "$required_architecture"
@@ -84,7 +94,7 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"
 fi
-ditto -c -k --keepParent "$app" "$zip"
+ditto -c -k --keepParent --norsrc --noextattr "$app" "$zip"
 hdiutil verify "$dmg"
 (
   cd "$dist_dir"

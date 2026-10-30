@@ -184,9 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     let secondPointLabel = textLabel("B：尚未框选",color:.secondaryLabelColor)
     let clickPlanLabel = textLabel("",size:12,color:.secondaryLabelColor)
     var regionMode: NSSegmentedControl!
-    var damai: DamaiController!
+    var damai: DamaiHotkeyController!
+    var phoneNTP: PhoneNTPValidationController!
     var normalOnlyRows: [NSView] = []
-    var normalBusy: Bool { engine.isRunning || pendingNormal != nil || calibrationPreparation != nil || normalCompletionPending }
+    var normalBusy: Bool { engine.isRunning || pendingNormal != nil || calibrationPreparation != nil || normalCompletionPending || phoneNTP?.isPreparing == true }
     var normalCompletionPending = false
     var normalExecutionToken = UUID()
     var calibrationPreparation: UUID?
@@ -229,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     var server: CalibrationHTTPServer?; var benchmarkExit = false; var terminating = false
     var serverStarting = false
     var phoneExpectedLatency: Double?; var calibrationSource = ""
+    var phoneRunClockID: String?
     var outputRoot: URL {
         if let i = CommandLine.arguments.firstIndex(of:"--report-dir"), CommandLine.arguments.count > i+1 {
             return URL(fileURLWithPath:CommandLine.arguments[i+1],isDirectory:true)
@@ -283,12 +285,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func buildUI() {
         let visibleHeight = NSScreen.main?.visibleFrame.height ?? 920
         window = NSWindow(contentRect:NSRect(x:120,y:120,width:890,height:min(880,visibleHeight-50)),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title = "准点点击器"; window.minSize = NSSize(width:890,height:620); window.delegate = self
+        let version = Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? ""
+        let build = Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? ""
+        let localSigning = Bundle.main.object(forInfoDictionaryKey:"PunctualSigningChannel") as? String == "local-development"
+        window.title = "准点点击器 \(version) (\(build))" + (localSigning ? " · 本机签名" : "")
+        window.minSize = NSSize(width:890,height:620); window.delegate = self
         window.isReleasedWhenClosed = false
         let root = window.contentView!; root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         let header = textLabel("准点点击",size:30,bold:true)
-        let desc = textLabel("单区／双区按计划点击；大麦方案按当前页面识别按钮，每次操作后重新判断。",color:.secondaryLabelColor)
+        let desc = textLabel("单区／双区按计划点击；大麦三键默认点底部，按住切换区域，松开回到底部。",color:.secondaryLabelColor)
         syncButton = button("校准北京时间 · NTP",#selector(syncNetworkTime))
         networkStatusLabel.preferredMaxLayoutWidth = 825
         regionMode = NSSegmentedControl(labels:["单区域","双区域轮流","大麦方案"],trackingMode:.selectOne,target:self,action:#selector(regionModeChanged))
@@ -309,9 +315,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let permission = button("开启辅助功能权限",#selector(requestPermission))
         startButton = button("开始等待并点击",#selector(startNormal)); startButton.bezelColor = .systemTeal
         stopButton = button("立即停止 · Esc",#selector(stop)); stopButton.isEnabled = false
-        controls = [targetField,freqField,countField,compensationField,holdField,regionMode,pick,secondPickButton,future,local,validate,phone,phoneBase,phoneValid,apply]
-        damai = DamaiController(app:self)
+        controls = [targetField,freqField,countField,compensationField,holdField,regionMode,pick,secondPickButton,future,local,validate,phone,phoneBase,phoneValid,readPhone,apply]
+        damai = DamaiHotkeyController(app:self)
         let damaiPanel = damai.makePanel()
+        phoneNTP = PhoneNTPValidationController(app:self)
+        let phoneNTPPanel = phoneNTP.makePanel()
         let aRow = row([pick,pointLabel]), bRow = row([secondPickButton,secondPointLabel])
         let rateRow = row([textLabel("总频率"),freqField,textLabel("次/秒"),textLabel("总点击数"),countField,textLabel("次"),textLabel("按住"),holdField,textLabel("毫秒")])
         let compensationRow = row([textLabel("提前补偿"),compensationField,textLabel("毫秒（正数提前，负数延后）"),apply])
@@ -333,8 +341,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             compensationRow,
             row([local,validate,phone]),
             row([phoneBase,phoneValid,readPhone]), calibrationLabel,
+            phoneNTPPanel,
             row([startButton,stopButton]),
-            textLabel("圈选后固定窗口位置与大小。切换目标应用、移动窗口或休眠会停止任务。",size:12,color:.secondaryLabelColor),
+            textLabel("单／双区域需固定窗口；大麦三区随镜像平移。切换应用、休眠会停止；明显缩放后请重新框选。",size:12,color:.secondaryLabelColor),
             scroll
         ]
         // Keep all controls reachable on smaller laptop displays after adding the B row.
@@ -368,7 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         normalOnlyRows.forEach { $0.isHidden = isDamai }
         damai?.panel.isHidden = !isDamai
         damai?.updateControls()
-        startButton.title = isDamai ? "整分启动大麦识别" : "开始等待并点击"
+        startButton.title = isDamai ? "整分启动三键连点" : "开始等待并点击"
         secondPickButton.isEnabled = usesTwoRegions && !engine.isRunning && pendingNormal == nil
         secondPointLabel.textColor = usesTwoRegions ? .secondaryLabelColor : .tertiaryLabelColor
         updateClickPlan()
@@ -413,6 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             guardState.set(trusted && sameFrame && foreground)
         }
         damai?.tick()
+        phoneNTP?.tick()
     }
     func log(_ message: String) {
         let s = "[\(formatTime(Date().timeIntervalSince1970).suffix(12))] \(message)\n"
@@ -688,12 +698,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     @objc func stop() {
         calibrationGeneration = UUID()
+        phoneNTP?.cancel()
         if calibrationPreparation != nil {
             calibrationPreparation = nil
             controls.forEach { $0.isEnabled = true }; startButton.isEnabled = true; stopButton.isEnabled = false
             updateRegionControls()
         }
-        damai?.stop(reason:"你已停止大麦方案；晚到的识别结果不会再发起点击。")
+        damai?.stop(reason:"你已停止三键连点；未发送的点击已取消。")
         if !overlays.isEmpty { overlays.forEach { $0.orderOut(nil) }; overlays.removeAll() }
         if pendingNormal != nil { pendingFailed("已取消北京时间等待；晚到的授时结果不会重新启动点击。") }
         engine.cancel()
@@ -717,7 +728,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         report["timeBasis"] = activeNetworkTime == nil ? "Mac raw system epoch for local/phone latency measurement" : "NTP UTC epoch, displayed and parsed in Asia/Shanghai"
         if let snapshot = activeNetworkTime,let data = try? JSONEncoder().encode(snapshot),let object = try? JSONSerialization.jsonObject(with:data) { report["ntpSnapshot"] = object }
         let rows: [[String:Any]] = events.map { e in
-            var d: [String:Any] = ["index":e.index,"targetMs":e.targetWallEpoch*1000,"sentUpMs":e.mouseUpWallEpoch*1000,"schedulerErrorMs":e.upLatenessMs,"requestVsTargetMs":e.requestVsTargetMs,"sentUpMonoNs":e.mouseUpCallStartMonoNs]
+            let sentEpoch = activeNetworkTime.map { $0.utcEpoch(atMonoNs:e.mouseUpCallStartMonoNs) } ?? e.mouseUpWallEpoch
+            var d: [String:Any] = ["index":e.index,"targetMs":e.targetWallEpoch*1000,"sentUpMs":sentEpoch*1000,"sentUpRawSystemMs":e.mouseUpWallEpoch*1000,"schedulerErrorMs":e.upLatenessMs,"requestVsTargetMs":(sentEpoch-e.targetWallEpoch)*1000,"sentUpMonoNs":e.mouseUpCallStartMonoNs]
             d["pointX"] = e.pointX; d["pointY"] = e.pointY
             if let slot = e.regionIndex { d["region"] = slot == 0 ? "A" : "B" }
             if let snapshot = activeNetworkTime {
@@ -747,18 +759,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             } else { lastCalibration = nil; calibrationLabel.stringValue = "本机收到 \(measured.count)/\(config.count)；接收不完整，不采用补偿" }
             log(calibrationLabel.stringValue)
         }
+        let finishedRun = currentRunID, finishedMode = currentMode, finishedClockID = phoneRunClockID
+        let finishedSnapshot = activeNetworkTime
+        let finishedEvents = events
         let filename = currentMode+"-"+currentRunID+".json"; writeJSON(report,name:filename)
         activeNetworkTime = nil
         if currentMode.hasPrefix("phone") {
             let isAnchor = currentMode == "phone-anchor"
             let generation = calibrationGenerationAtStart
-            api("/send-events",body:["runId":currentRunID,"events":events.map{["index":$0.index,"sentUpMs":$0.mouseUpWallEpoch*1000]}]) { _ in
+            var sendBody: [String:Any] = ["runId":finishedRun,"events":finishedEvents.map { event in
+                ["index":event.index,"sentUpMs":finishedSnapshot.map { $0.utcEpoch(atMonoNs:event.mouseUpCallStartMonoNs)*1000 } ?? event.mouseUpWallEpoch*1000] as [String:Any]
+            }]
+            if let finishedClockID { sendBody["clockId"] = finishedClockID }
+            api("/send-events",body:sendBody) { sentResult in
                 DispatchQueue.main.asyncAfter(deadline:.now()+0.8) {
-                    guard self.calibrationGeneration == generation,self.damai?.isActive != true,!self.normalBusy,!self.terminating else { return }
+                    guard self.calibrationGeneration == generation,self.currentRunID == finishedRun,self.currentMode == finishedMode,
+                          self.damai?.isActive != true,!self.normalBusy,!self.terminating else { return }
+                    if finishedMode == "phone-ntp-validation" {
+                        guard sentResult != nil, sentResult?["error"] == nil else {
+                            self.log("NTP 实际发送记录回传失败；本轮不能视为有效校验。"); return
+                        }
+                        self.readPhoneResults(); return
+                    }
                     if isAnchor && completion.reason == "completed" {
                         self.api("/summary") { j in
-                            guard self.calibrationGeneration == generation,self.damai?.isActive != true,!self.normalBusy,!self.terminating else { return }
+                            guard self.calibrationGeneration == generation,self.currentRunID == finishedRun,self.currentMode == finishedMode,
+                                  self.damai?.isActive != true,!self.normalBusy,!self.terminating else { return }
                             guard let json = j, let ms = json["medianLatencyMs"] as? Double,
+                                  json["runId"] as? String == finishedRun,
                                   (json["matchedSendCount"] as? Int) == 1,
                                   (json["strayCount"] as? Int ?? 0) == 0, (json["clockFresh"] as? Bool) == true else {
                                 self.fail("单击锚定未收到有效回执。确认手机页面已经校时、镜像测试按钮已正确圈选，再重试。"); return
@@ -873,6 +901,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let comp = compensated ? (Double(compensationField.stringValue) ?? 0) : 0
         let c = ClickConfiguration(targetWallEpoch:epoch,point:p,frequencyHz:5,count:sampleCount,compensationMs:comp,holdMs:8)
         var body:[String:Any] = ["runId":run,"targetsMs":(0..<sampleCount).map{(epoch+Double($0)/5)*1000},"compensationMs":comp,"label":isAnchor ? "单击锚定" : (compensated ? "镜像验证" : "镜像采样")]
+        do { try server?.useTimeReference(nil) }
+        catch { calibrationPreparation = nil; controls.forEach { $0.isEnabled = true }; startButton.isEnabled = true; stopButton.isEnabled = false; fail(error.localizedDescription); return }
+        let rawClockID = server?.clockMetadata["clockId"] as? String
+        if let rawClockID { body["clockId"] = rawClockID; body["timeBasis"] = "raw-system" }
         if let expected = phoneExpectedLatency { body["expectedLatencyMs"] = expected }
         api("/test-plan",body:body) { result in
             guard self.calibrationPreparation == preparation,self.damai?.isActive != true,!self.terminating else { return }
@@ -880,12 +912,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             self.controls.forEach { $0.isEnabled = true }; self.startButton.isEnabled = true; self.stopButton.isEnabled = false
             self.updateRegionControls()
             guard let result = result, result["error"] == nil else { self.fail("手机校准服务不可用。先点“手机镜像校准…”启动服务。"); return }
-            do { try self.begin(c,target:t,mode:isAnchor ? "phone-anchor" : (compensated ? "phone-validation" : "phone-calibration")); self.currentRunID = run } catch { self.fail(error.localizedDescription) }
+            do { try self.begin(c,target:t,mode:isAnchor ? "phone-anchor" : (compensated ? "phone-validation" : "phone-calibration")); self.currentRunID = run; self.phoneRunClockID = rawClockID } catch { self.fail(error.localizedDescription) }
         }
     }
     @objc func readPhoneResults() {
+        guard !phoneNTP.isPreparing else { return }
+        let requestedRun = currentRunID, requestedGeneration = calibrationGeneration
         api("/summary") { json in
+            guard self.currentRunID == requestedRun,self.calibrationGeneration == requestedGeneration,!self.phoneNTP.isPreparing else { return }
             guard let j = json else { self.fail("暂时读不到手机校准结果，请检查本地校准服务。"); return }
+            if j["timeBasis"] as? String == "ntp-utc" {
+                guard j["runId"] as? String == self.currentRunID else { self.log("手机结果属于另一轮计划，未覆盖当前结果。"); return }
+                self.phoneNTP.consumeSummary(j); return
+            }
             if let ms = j["medianLatencyMs"] as? Double,let count = j["matchedSendCount"] as? Int,count == 30,
                (j["plannedCount"] as? Int) == 30,(j["strayCount"] as? Int ?? 0) == 0,(j["clockFresh"] as? Bool) == true,
                let run = j["runId"] as? String,run == self.currentRunID {
@@ -897,6 +936,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {
+        phoneNTP?.cancel()
         if damai?.isActive == true {
             terminating = true; damai.stop(reason:"退出应用，停止大麦方案。")
             return damai.isActive ? .terminateLater : .terminateNow
@@ -906,6 +946,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         return .terminateNow
     }
     func applicationWillTerminate(_ notification:Notification) {
+        damai?.savePreferences()
+        phoneNTP?.cancel()
         for (key,control) in [("frequency",freqField),("count",countField),("compensation",compensationField),("hold",holdField)] {
             UserDefaults.standard.set(control.stringValue,forKey:key)
         }
@@ -914,7 +956,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         engine.cancel(); server?.stop(); timer?.invalidate()
         if let a = activity { ProcessInfo.processInfo.endActivity(a) }
     }
-    func windowShouldClose(_ sender:NSWindow) -> Bool { if engine.isRunning || pendingNormal != nil || damai?.isActive == true { stop() }; return true }
+    func windowShouldClose(_ sender:NSWindow) -> Bool { if normalBusy || damai?.isActive == true { stop() }; return true }
 }
 
 @main struct PunctualClicker {

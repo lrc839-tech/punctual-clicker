@@ -175,6 +175,88 @@ enum CalibrationServerTests {
             try expect(number(result, "sampleCount") == 20 && number(result, "matchedSendCount") == 20 && number(result, "medianLatencyMs") == 10, "并发上传丢失数据")
             _ = try JSONSerialization.jsonObject(with: Data(contentsOf: report))
         }
+        try check("NTP冻结锚使用单调时钟投影且带源、精度和有效期") {
+            let source = CalibrationClockSource(), mono = CalibrationClockSource.nowNs()
+            let reference = CalibrationTimeReference(id: "anchor", epochMs: 1_000_000, monoNs: mono,
+                uncertaintyMs: 4, validityMs: 1000, driftPPM: 20, source: "test.ntp.example")
+            try source.use(reference)
+            let at25 = source.reading(atMonoNs: mono+25_000_000)
+            try expect(abs(at25.epochMs-1_000_025)<0.00001 && at25.clockId == "anchor" && at25.timeBasis == "ntp-utc", "NTP投影混用了Date或锚点")
+            try expect(at25.fresh && abs(at25.uncertaintyMs!-4.0005)<0.00001 && at25.source == "test.ntp.example", "源与不确定度缺失")
+            try expect(!source.reading(atMonoNs: mono+1_001_000_000).fresh, "过期锚仍有效")
+            do {
+                try source.use(CalibrationTimeReference(id: "anchor", epochMs: 9_000_000, monoNs: mono,
+                    uncertaintyMs: 4, validityMs: 1000, driftPPM: 20, source: "test.ntp.example"))
+                throw Failure(description: "同一个clockId可更换时间参考")
+            } catch is CalibrationServerError { }
+            try expect(abs(source.reading(atMonoNs: mono+25_000_000).epochMs-1_000_025)<0.00001, "失败配置改变了原锚")
+            try source.use(nil)
+            let before = Date().timeIntervalSince1970*1000, raw = source.reading()
+            try expect(raw.timeBasis == "raw-system" && raw.epochMs>=before && raw.epochMs<=Date().timeIntervalSince1970*1000 && raw.uncertaintyMs==nil, "恢复本机时钟失败")
+        }
+        try check("NTP三时刻与延迟同源计算，校时就绪可先上传空样本") {
+            let source = CalibrationClockSource(), mono = CalibrationClockSource.nowNs()
+            try source.use(CalibrationTimeReference(id: "n1", epochMs: 1_000_000, monoNs: mono,
+                uncertaintyMs: 5, validityMs: 120_000, driftPPM: 15, source: "clock.example"))
+            let s = CalibrationState(reportURL: root.appendingPathComponent("ntp-state.json"), clockSource: source)
+            let plan = try s.setPlan(["runId": "ntp", "clockId": "n1", "timeBasis": "ntp-utc", "targetsMs": [1_000_025]])
+            try expect(plan["clockId"] as? String == "n1" && plan["timeBasis"] as? String == "ntp-utc", "计划没绑定NTP时钟")
+            let phoneClock: [String: Any] = ["clockId": "n1", "timeBasis": "ntp-utc", "calibratedAtMacMs": 999_999.0,
+                "uncertaintyEstimateMs": 2.0, "rttMs": 4.0, "rounds": 20]
+            let ready = try s.ingestSamples(["runId": "ntp", "clockId": "n1", "timeBasis": "ntp-utc", "samples": [], "clock": phoneClock])
+            try expect(ready["clockFresh"] as? Bool == true && number(ready, "sampleCount")==0, "手机就绪无法通知Mac")
+            _ = try s.ingestSends(["runId": "ntp", "clockId": "n1", "events": [["index": 1, "sentUpMs": 1_000_020]]])
+            let result = try s.ingestSamples(["runId": "ntp", "clockId": "n1", "samples": [["index": 1, "receivedMacMs": 1_000_050]], "clock": phoneClock])
+            try expect(number(result, "latestTargetMs")==1_000_025 && number(result, "latestSentUpMs")==1_000_020 && number(result, "latestReceivedMs")==1_000_050, "三个时刻不是同一时钟")
+            try expect(number(result, "medianLatencyMs")==30 && number(result, "p50ErrorMs")==25, "延迟或目标误差混淆")
+            try expect(result["samplesClockValidAtEvent"] as? Bool == true, "未记录接收瞬间的校时有效性")
+            try expect(number(result, "ntpEstimatedUncertaintyMs")!>=5 && number(result, "totalUncertaintyEstimateMs")!>=7, "NTP和LAN不确定度未分别保留")
+        }
+        try check("NTP拒绝旧时钟、缺失时钟与过期手机校时，失败不修改已有结果") {
+            let source = CalibrationClockSource(), mono = CalibrationClockSource.nowNs()
+            try source.use(CalibrationTimeReference(id: "strict", epochMs: 2_000_000, monoNs: mono,
+                uncertaintyMs: 3, validityMs: 120_000, driftPPM: 0, source: "clock.example"))
+            let s = CalibrationState(reportURL: root.appendingPathComponent("ntp-strict.json"), clockSource: source)
+            for plan: [String: Any] in [["runId": "x", "targetsMs": [2_000_010]],
+                ["runId": "x", "targetsMs": [2_000_010], "clockId": "wrong", "timeBasis": "ntp-utc"],
+                ["runId": "x", "targetsMs": [2_000_010], "clockId": "strict", "timeBasis": "raw-system"],
+                ["runId": "x", "targetsMs": [2_120_001], "clockId": "strict", "timeBasis": "ntp-utc"]] {
+                do { _ = try s.setPlan(plan); throw Failure(description: "无效NTP计划被接受") } catch is CalibrationServerError { }
+            }
+            _ = try s.setPlan(["runId": "strict-run", "targetsMs": [2_000_010], "clockId": "strict", "timeBasis": "ntp-utc"])
+            for body: [String: Any] in [["runId": "strict-run", "events": [["index": 1, "sentUpMs": 2_000_010]]],
+                ["runId": "strict-run", "clockId": "wrong", "events": []],
+                ["runId": "strict-run", "clockId": "strict", "events": [["index": 1, "sentUpMs": 2_120_001]]]] {
+                do { _ = try s.ingestSends(body); throw Failure(description: "错误NTP发送记录被接受") } catch is CalibrationServerError { }
+            }
+            for clock: [String: Any] in [["clockId": "wrong", "timeBasis": "ntp-utc", "calibratedAtMacMs": 2_000_000, "uncertaintyEstimateMs": 1],
+                ["clockId": "strict", "timeBasis": "raw-system", "calibratedAtMacMs": 2_000_000, "uncertaintyEstimateMs": 1],
+                ["clockId": "strict", "timeBasis": "ntp-utc", "calibratedAtMacMs": 1_900_000, "uncertaintyEstimateMs": 1]] {
+                do {
+                    _ = try s.ingestSamples(["runId": "strict-run", "clockId": "strict", "samples": [["index": 1, "receivedMacMs": 2_000_030]], "clock": clock])
+                    throw Failure(description: "过期或错误手机校时被接受")
+                } catch is CalibrationServerError { }
+            }
+            try expect(number(s.summary(), "sampleCount")==0 && number(s.summary(), "matchedSendCount")==0, "失败批次污染结果")
+            try source.use(nil)
+            do { _ = try s.ingestSends(["runId": "strict-run", "clockId": "strict", "events": []]); throw Failure(description: "旧基准切换后还接受旧回执") } catch is CalibrationServerError { }
+        }
+        try check("回传延迟不计入点击延迟，过期锚只使校验状态失效") {
+            let source = CalibrationClockSource(), mono = CalibrationClockSource.nowNs()
+            try source.use(CalibrationTimeReference(id: "delayed", epochMs: 3_000_000, monoNs: mono,
+                uncertaintyMs: 1, validityMs: 50, driftPPM: 0, source: "clock.example"))
+            let s = CalibrationState(reportURL: root.appendingPathComponent("ntp-delayed.json"), clockSource: source)
+            _ = try s.setPlan(["runId": "delayed-run", "targetsMs": [3_000_010], "clockId": "delayed", "timeBasis": "ntp-utc"])
+            usleep(80_000)
+            _ = try s.ingestSends(["runId": "delayed-run", "clockId": "delayed", "events": [["index": 1, "sentUpMs": 3_000_010]]])
+            let result = try s.ingestSamples(["runId": "delayed-run", "clockId": "delayed", "samples": [["index": 1, "receivedMacMs": 3_000_030]],
+                "clock": ["clockId": "delayed", "timeBasis": "ntp-utc", "calibratedAtMacMs": 3_000_005, "uncertaintyEstimateMs": 1]])
+            try expect(number(result, "medianLatencyMs")==20 && number(result, "latestReceivedMs")==3_000_030, "把80ms回传等候加进了点击时间")
+            try expect(result["ntpClockFresh"] as? Bool == false && result["clockFresh"] as? Bool == false, "过期参考仍显示可用")
+            try expect(result["samplesClockValidAtEvent"] as? Bool == true, "报告晚回传把有效的历史事件改成无效")
+            try source.use(nil)
+            try expect(s.summary()["samplesClockValidAtEvent"] as? Bool == true && number(s.summary(), "latestReceivedMs")==3_000_030, "更换时钟破坏了历史事件证据")
+        }
 
         try Data("<!doctype html><p>原生手机校准 · 校时 20 轮</p>".utf8).write(to: root.appendingPathComponent("index.html"))
         let server = try CalibrationHTTPServer(port: 0, resourceRoot: root, reports: root.appendingPathComponent("http"))
@@ -213,6 +295,27 @@ enum CalibrationServerTests {
                 try expect(try request(port, "/test-plan", body: ["runId": "forbidden", "targetsMs": [1]], origin: origin).status == 403, "应拒绝Origin \(origin)")
             }
             try expect(try request(port, "/plan").json()["runId"] as? String == "http", "跨站写已改变状态")
+        }
+        try check("真实HTTP按冻结NTP锚返回收发时间，并拒绝跨时钟请求") {
+            let anchor = Date().timeIntervalSince1970*1000+400_000
+            let mono = CalibrationClockSource.nowNs()
+            try server.useTimeReference(CalibrationTimeReference(id: "http-ntp", epochMs: anchor, monoNs: mono,
+                uncertaintyMs: 6, validityMs: 120_000, driftPPM: 15, source: "ntp.example"))
+            let t = try request(port, "/time").json()
+            try expect(t["clockId"] as? String == "http-ntp" && t["timeBasis"] as? String == "ntp-utc" && t["clockFresh"] as? Bool == true, "HTTP缺少NTP基准")
+            try expect(number(t, "receiveMs")! >= anchor && number(t, "sendMs")! >= number(t, "receiveMs")! && number(t, "sendMs")! < anchor+1000, "HTTP仍读取本机Date时间")
+            let target = anchor+100
+            try expect(try request(port, "/test-plan", body: ["runId": "http-ntp-run", "targetsMs": [target]]).status==400, "NTP无基准计划被接受")
+            let plan = try request(port, "/test-plan", body: ["runId": "http-ntp-run", "clockId": "http-ntp", "timeBasis": "ntp-utc", "targetsMs": [target]])
+            try expect(plan.status==200 && (try request(port, "/plan").json())["clockId"] as? String=="http-ntp", "NTP计划没有贯通HTTP")
+            let clock: [String: Any] = ["clockId": "http-ntp", "timeBasis": "ntp-utc", "calibratedAtMacMs": anchor+1, "uncertaintyEstimateMs": 2]
+            try expect(try request(port, "/samples", body: ["runId": "http-ntp-run", "clockId": "http-ntp", "samples": [["index": 1, "receivedMacMs": target+30]], "clock": clock]).status==200, "NTP样本上传失败")
+            let result = try request(port, "/send-events", body: ["runId": "http-ntp-run", "clockId": "http-ntp", "events": [["index": 1, "sentUpMs": target]]]).json()
+            try expect(number(result, "medianLatencyMs")==30 && number(result, "latestTargetMs")==target, "NTP HTTP计算错误")
+            try server.useTimeReference(nil)
+            let raw = try request(port, "/time").json()
+            try expect(raw["timeBasis"] as? String=="raw-system" && abs(number(raw, "sendMs")!-Date().timeIntervalSince1970*1000)<1000, "NTP测试污染了原本机测试时钟")
+            try expect(try request(port, "/send-events", body: ["runId": "http-ntp-run", "clockId": "http-ntp", "events": []]).status==400, "切回本机后仍接受旧NTP回执")
         }
         try check("拆分请求头/JSON、Content-Length和断开处理") {
             let payload = Data("{\"runId\":\"split\",\"targetsMs\":[1000]}".utf8)

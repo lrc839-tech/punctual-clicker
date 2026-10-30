@@ -4,23 +4,50 @@ setopt PIPE_FAIL
 
 project_root="${0:A:h}"
 cd "$project_root"
-version="${VERSION:-0.5.0}"
-build_number="${BUILD_NUMBER:-9}"
+version="${VERSION:-0.7.0}"
+build_number="${BUILD_NUMBER:-27}"
 output_dir="${BUILD_DIR:-$project_root/build}"
 output_dir="${output_dir:A}"
 install_requested=false
+identity_change_allowed=false
+distribution_requested=false
 for argument in "$@"; do
   case "$argument" in
     --install) install_requested=true ;;
+    --allow-identity-change) identity_change_allowed=true ;;
+    --distribution) distribution_requested=true ;;
     --help|-h)
       print -- "Usage: ./build.sh [--install]"
       print -- "Builds a self-contained Universal macOS app in build/."
       print -- "--install also copies it to ~/Applications/准点点击器/."
+      print -- "Updates must satisfy the installed code identity; --allow-identity-change explicitly permits a migration that needs reauthorization."
+      print -- "Local builds reuse the configured local certificate. --distribution excludes local development identities."
       print -- "Optional environment: VERSION, BUILD_NUMBER, BUILD_DIR, SIGNING_IDENTITY."
       exit 0 ;;
     *) print -u2 -- "Unknown argument: $argument"; exit 2 ;;
   esac
 done
+signing_identity="${SIGNING_IDENTITY:-}"
+signing_dir="$HOME/Library/Application Support/PunctualClicker/Signing"
+local_signing=false
+signing_channel="ad-hoc"
+if ! $distribution_requested && [[ -f "$signing_dir/local-identity.sha1" ]]; then
+  configured_identity=$(<"$signing_dir/local-identity.sha1")
+  if [[ -z "$signing_identity" || "$signing_identity" == "$configured_identity" ]]; then
+    [[ "$configured_identity" =~ '^[A-Fa-f0-9]{40}$' ]] || { print -u2 -- "Invalid configured local signing identity; refusing ad-hoc fallback."; exit 3; }
+    [[ -f "$signing_dir/local-certificate.cer" && -f "$signing_dir/local-keychain.path" ]] || { print -u2 -- "Local signing configuration is incomplete; refusing ad-hoc fallback."; exit 3; }
+    signing_identity="$configured_identity"
+    signing_keychain=$(<"$signing_dir/local-keychain.path")
+    [[ -f "$signing_keychain" ]] || { print -u2 -- "Configured local keychain is unavailable; refusing ad-hoc fallback."; exit 3; }
+    local_signing=true; signing_channel="local-development"
+  fi
+fi
+if [[ -n "$signing_identity" ]] && ! $local_signing; then signing_channel="external-identity"; fi
+if $local_signing && [[ -z "${BUILD_DIR:-}" ]]; then
+  # Keep local signed outputs outside Documents/iCloud metadata providers and
+  # out of Spotlight's ordinary application search results.
+  output_dir="$HOME/Library/Application Support/PunctualClicker/Build"
+fi
 if [[ ! "$version" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
   print -u2 -- "VERSION must have the form 0.4.2."; exit 2
 fi
@@ -71,11 +98,16 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
+<key>PunctualSigningChannel</key><string>$signing_channel</string>
 <key>NSLocalNetworkUsageDescription</key><string>在同一局域网内与 iPhone Safari 校准页通信，测量手机镜像点击的接收延迟。</string>
 </dict></plist>
 PLIST
-if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
-  codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp \
+if $local_signing; then
+  local_requirement="=designated => identifier \"local.lrc.punctual-clicker\" and certificate leaf = H\"$signing_identity\""
+  codesign --force --sign "$signing_identity" --keychain "$signing_keychain" --timestamp=none \
+    --requirements "$local_requirement" --identifier local.lrc.punctual-clicker "$app"
+elif [[ -n "$signing_identity" ]]; then
+  codesign --force --sign "$signing_identity" --options runtime --timestamp \
     --identifier local.lrc.punctual-clicker "$app"
 else
   codesign --force --sign - --timestamp=none --identifier local.lrc.punctual-clicker "$app"
@@ -92,7 +124,9 @@ ditto --norsrc --noextattr "$app" "$output_app"
 codesign --verify --deep --strict "$output_app"
 print -- "Built: $output_app"
 print -- "Architectures: $(xcrun lipo -archs "$output_app/Contents/MacOS/PunctualClicker")"
-if [[ -z "${SIGNING_IDENTITY:-}" ]]; then
+if $local_signing; then
+  print -- "Signing: persistent local development certificate $signing_identity; not Developer ID or notarized."
+elif [[ -z "$signing_identity" ]]; then
   print -- "Signing: ad-hoc; not Developer ID signed and not notarized."
 fi
 
@@ -101,6 +135,9 @@ if $install_requested; then
   install_app="$install_dir/准点点击器.app"
   if /bin/ps -axo comm= | /usr/bin/grep -F -x "$install_app/Contents/MacOS/PunctualClicker" >/dev/null; then
     print -u2 -- "The installed app is running. Quit it, then run ./build.sh --install again."; exit 1
+  fi
+  if [[ -d "$install_app" ]] && ! $identity_change_allowed; then
+    /bin/zsh "$project_root/scripts/check-update-identity.sh" "$install_app" "$app"
   fi
   mkdir -p "$install_dir"
   rm -rf "$install_app"

@@ -14,6 +14,29 @@ xcrun swiftc -O -swift-version 5 -parse-as-library \
   -o .build/TimingEngineTests -framework ApplicationServices
 
 task_test_status=0
+xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/DamaiRegionProfile.swift Tests/DamaiRegionProfileTests.swift \
+  -o .build/DamaiRegionProfileTests -framework ApplicationServices
+if ! .build/DamaiRegionProfileTests; then task_test_status=1; fi
+xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/TimingEngine.swift Sources/HoldClickEngine.swift Sources/ImmediateClickStart.swift Tests/ImmediateClickStartTests.swift \
+  -o .build/ImmediateClickStartTests -framework ApplicationServices
+if ! .build/ImmediateClickStartTests; then task_test_status=1; fi
+xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/BusinessReceiptReview.swift Tests/BusinessReceiptReviewTests.swift \
+  -o .build/BusinessReceiptReviewTests -framework AppKit
+if ! .build/BusinessReceiptReviewTests; then task_test_status=1; fi
+task_node_binary="$(command -v node || true)"
+if [[ -z "$task_node_binary" && -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" ]]; then
+  task_node_binary="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+fi
+if [[ -z "$task_node_binary" ]]; then
+  print -u2 -- "开发测试需要 Node.js；发行 App 运行不需要。"; task_test_status=1
+elif ! "$task_node_binary" Tests/PhoneCalibrationPageTests.js; then task_test_status=1; fi
+xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/TimingEngine.swift Sources/HoldClickEngine.swift Tests/HoldClickEngineTests.swift \
+  -o .build/HoldClickEngineTests -framework ApplicationServices
+if ! .build/HoldClickEngineTests; then task_test_status=1; fi
 for test_name in DamaiPlanTests DamaiRunPolicyTests; do
   xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiPlan.swift Sources/DamaiRunPolicy.swift "Tests/$test_name.swift" -framework ApplicationServices -o ".build/$test_name"
   if ! ".build/$test_name"; then task_test_status=1; fi
@@ -22,6 +45,12 @@ xcrun swiftc -O -swift-version 5 -parse-as-library \
   Sources/TargetVisibility.swift Tests/TargetVisibilityTests.swift \
   -o .build/TargetVisibilityTests -framework ApplicationServices
 if ! .build/TargetVisibilityTests; then
+  task_test_status=1
+fi
+xcrun swiftc -O -swift-version 5 -parse-as-library \
+  Sources/DamaiRegionProfile.swift Sources/TargetVisibility.swift Sources/WindowRelativeClickTarget.swift Tests/WindowRelativeClickTargetTests.swift \
+  -o .build/WindowRelativeClickTargetTests -framework ApplicationServices
+if ! .build/WindowRelativeClickTargetTests; then
   task_test_status=1
 fi
 xcrun swiftc -O -swift-version 5 -parse-as-library \

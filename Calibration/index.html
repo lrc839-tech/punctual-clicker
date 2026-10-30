@@ -1,36 +1,340 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>准点点击器 · 手机路径校准</title>
 <style>
-:root{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#152639;background:#f2f5f8;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:22px 18px 32px;max-width:700px;margin:auto}h1{font-size:26px;margin:8px 0}p{line-height:1.55;color:#526477;font-size:14px}.eyebrow{font-size:12px;color:#4160b6;letter-spacing:.1em;font-weight:650}.card{background:#fff;border:1px solid #e0e6ed;border-radius:18px;padding:18px;margin:16px 0}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:12px 15px;background:#185adc;color:white}button:disabled{opacity:.5}.secondary{background:#e9eef7;color:#24446c}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}.metric span{display:block;font-size:12px;color:#6f8092}.metric strong{display:block;margin-top:5px;font-size:21px;font-variant-numeric:tabular-nums}.target{width:100%;height:32vh;min-height:205px;background:#185adc;border:3px solid #377dfd;border-radius:20px;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none;gap:10px;margin:18px 0}.target strong{font-size:28px}.target span{opacity:.8;font-size:13px}.target.hit{background:#168268;border-color:#27b598}.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}.status{font-size:13px;line-height:1.55}.warning{font-size:12px;color:#8b6030;background:#fff6e9;padding:12px;border-radius:10px}table{width:100%;font-size:12px;border-collapse:collapse;text-align:right}td,th{padding:9px 5px;border-bottom:1px solid #edf0f4}th:first-child,td:first-child{text-align:left}.log{max-height:240px;overflow:auto}a{color:#185adc}input{width:80px;font:inherit;padding:9px;border:1px solid #ccd7e5;border-radius:8px}
+:root{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#152639;background:#f2f5f8;color-scheme:light}*{box-sizing:border-box}body{margin:0;padding:22px 18px 32px;max-width:700px;margin:auto}h1{font-size:26px;margin:8px 0}p{line-height:1.55;color:#526477;font-size:14px}.eyebrow{font-size:12px;color:#4160b6;letter-spacing:.1em;font-weight:650}.card{background:#fff;border:1px solid #e0e6ed;border-radius:18px;padding:18px;margin:16px 0}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:12px 15px;background:#185adc;color:white}button:disabled{opacity:.5}.secondary{background:#e9eef7;color:#24446c}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}.metric span{display:block;font-size:12px;color:#6f8092}.metric strong{display:block;margin-top:5px;font-size:21px;font-variant-numeric:tabular-nums}#clock-card .metric span{height:2.8em}#rtt,#uncertainty{height:2.6em;line-height:1.3;overflow:hidden}.target{width:100%;height:32vh;min-height:205px;background:#185adc;border:3px solid #377dfd;border-radius:20px;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none;gap:10px;margin:18px 0}.target strong{font-size:28px}.target span{opacity:.8;font-size:13px}.target.hit{background:#168268;border-color:#27b598}.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}.status{font-size:13px;line-height:1.55}.warning{font-size:12px;color:#8b6030;background:#fff6e9;padding:12px;border-radius:10px}table{width:100%;font-size:12px;border-collapse:collapse;text-align:right}td,th{padding:9px 5px;border-bottom:1px solid #edf0f4}th:first-child,td:first-child{text-align:left}.log{max-height:240px;overflow:auto}#clock-status,#plan-status,#clock-age{height:3.1em;overflow:auto}.timestamps{display:grid;gap:12px;margin-top:16px}.timestamp{display:flex;justify-content:space-between;align-items:center;gap:10px}.timestamp strong{font-size:20px;white-space:nowrap}.timestamp span{font-size:13px;color:#526477}#time-basis,#target-date{font-size:12px}a{color:#185adc}input{width:80px;font:inherit;padding:9px;border:1px solid #ccd7e5;border-radius:8px}
 </style></head><body>
 <div class="eyebrow">准点点击器 / MIRROR CALIBRATION</div><h1>测量手机收到点击的时刻</h1><p>保持此页在手机 Safari 前台，再用 Mac 的「iPhone 镜像」点击蓝色靶区。这里只测输入路径，不会购票或下单。</p>
-<div class="card"><div class="row"><strong>① 自动校准两台设备的时钟</strong><button id="sync">重新校时 20 轮</button></div><div class="metrics"><div class="metric"><span>最佳往返延迟</span><strong id="rtt">—</strong></div><div class="metric"><span>校时不确定度估计</span><strong id="uncertainty">—</strong></div></div><p id="clock-status" class="status">正在自动校时。校时完成后再开始测试。</p><p id="clock-age" class="status">校时年龄：—</p><p class="status">校时有效期为 60 秒；新轮次开始时若已超过 40 秒，会提前重新校时，为等待与采样预留时间。</p></div>
+<div class="card" id="clock-card"><div class="row"><strong>① 自动校准两台设备的时钟</strong><button id="sync">重新校时 20 轮</button></div><div class="metrics"><div class="metric"><span>最佳往返延迟</span><strong id="rtt">—</strong></div><div class="metric"><span>绝对时刻不确定度估计</span><strong id="uncertainty">—</strong></div></div><p id="clock-status" class="status">正在自动校时。校时完成后再开始测试。</p><p id="clock-age" class="status">校时年龄：—</p><p class="status">校时有效期为 60 秒；新轮次开始时若已超过 40 秒，会提前重新校时，为等待与采样预留时间。</p></div>
 <div class="card"><div class="row"><strong>② 自动接收 Mac 测试计划</strong><button id="refresh" class="secondary">刷新计划</button></div><p id="plan-status" class="status">每 500 ms 自动接收 Mac 测试计划。</p><div class="row"><span class="status">首次先做单击锚定，避免错配</span><button id="prepare" class="secondary">15 秒后 · 单击锚定</button></div></div>
 <button class="target" id="target" aria-label="手机点击校准靶区"><strong>点击校准靶区</strong><span id="counter">0 / 0 次</span><span id="countdown" class="mono">等待测试计划</span></button>
-<div class="card"><div class="row"><strong>③ 查看误差</strong><button id="refresh-summary" class="secondary">更新结果</button></div><div class="metrics"><div class="metric"><span>接收相对目标 · 中位误差</span><strong id="median">—</strong></div><div class="metric"><span>绝对误差 · P95</span><strong id="p95">—</strong></div><div class="metric"><span>发送到接收 · 中位延迟</span><strong id="latency">—</strong></div><div class="metric"><span>收到样本 / 匹配发送记录</span><strong id="matched">0 / 0</strong></div></div><p class="status" id="result-status">只有 Mac 上传了实际 mouseUp 发送时间，才会显示发送到接收延迟。</p><div class="log"><table><thead><tr><th>次数</th><th>接收时刻</th><th>目标误差</th></tr></thead><tbody id="rows"></tbody></table></div></div>
-<p class="warning">提前补偿能抵消稳定延迟，不能消除无线与系统抖动。RTT/2 是网络对称假设下的估计，并非误差上限。Safari 路径的测试结果不能当成大麦或券商的实际业务响应时间。</p><p id="notice" role="status"></p><a href="/report" target="_blank">查看本轮原始 JSON</a>
+<div class="card"><div class="row"><strong>③ 查看误差</strong><button id="refresh-summary" class="secondary">更新结果</button></div><div class="metrics"><div class="metric"><span>接收相对目标 · 中位误差</span><strong id="median">—</strong></div><div class="metric"><span>绝对误差 · P95</span><strong id="p95">—</strong></div><div class="metric"><span>发送到接收 · 中位延迟</span><strong id="latency">—</strong></div><div class="metric"><span>收到样本 / 匹配发送记录</span><strong id="matched">0 / 0</strong></div></div><p id="time-basis" class="status">本机时间参考 · UTC+8；等待 Mac 发起 NTP 到点校验。</p><div class="timestamps"><div class="timestamp"><span>计划目标</span><strong class="mono" id="target-time">—</strong></div><div class="timestamp"><span>Mac 实际发出</span><strong class="mono" id="sent-time">—</strong></div><div class="timestamp"><span>手机实际收到</span><strong class="mono" id="received-time">—</strong></div></div><p id="target-date" class="status">时:分:秒.毫秒 · 北京时间</p><p class="status" id="result-status">只有 Mac 上传了实际 mouseUp 发送时间，才会显示发送到接收延迟。</p><div class="log"><table><thead><tr><th>次数</th><th>接收北京时间</th><th>目标误差</th></tr></thead><tbody id="rows"></tbody></table></div></div>
+<p class="warning">提前补偿能抵消稳定延迟，不能消除无线与系统抖动。绝对时刻不确定度包含 NTP 授时估计与手机校时 RTT/2；RTT/2 依赖网络对称假设，并非误差上限。Safari 路径的测试结果不能当成大麦或券商的实际业务响应时间。</p><p id="notice" role="status"></p><a href="/report" target="_blank">查看本轮原始 JSON</a>
 <script>
 'use strict';
-const el=id=>document.getElementById(id), ms=n=>Number.isFinite(n)?n.toFixed(3)+' ms':'—';
-const CLOCK_MAX_AGE_MS=60000, CLOCK_REFRESH_BEFORE_RUN_MS=40000;
-let clock=null, plan={runId:'',targetsMs:[]}, localSamples=[], straySamples=[], syncing=false, posting=false, pending=false, loadingPlan=false;
-const phoneNow=()=>performance.timeOrigin+performance.now();
-function estimateClock(t0,t1,t2,t3){const rtt=Math.max(0,(t3-t0)-(t2-t1));return{offsetMs:((t1-t0)+(t2-t3))/2,rttMs:rtt,uncertaintyEstimateMs:rtt/2};}
-async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const json=await r.json();if(!r.ok)throw Error(json.error||r.statusText);return json;}
-function notice(message){el('notice').textContent=message;}
-async function syncClock(){if(syncing)return;syncing=true;el('sync').disabled=true;try{let rounds=[];for(let n=0;n<20;n++){const t0=phoneNow();const server=await api('/time');const t3=phoneNow();rounds.push(estimateClock(t0,server.receiveMs,server.sendMs,t3));el('clock-status').textContent=`正在校时 ${n+1} / 20…`;await new Promise(r=>setTimeout(r,30));}rounds.sort((a,b)=>a.rttMs-b.rttMs);clock={...rounds[0],rounds:20,calibratedAtMacMs:phoneNow()+rounds[0].offsetMs};el('rtt').textContent=ms(clock.rttMs);el('uncertainty').textContent='约 ±'+ms(clock.uncertaintyEstimateMs);el('clock-status').textContent=`已使用最低 RTT 样本。偏移 ${clock.offsetMs.toFixed(3)} ms。测试前可重新校时。`;notice('校时完成。请接收计划，然后通过镜像点击蓝色靶区。');}catch(e){notice('校时失败：'+e.message);}finally{syncing=false;el('sync').disabled=false;}}
-async function loadPlan(){if(loadingPlan)return;loadingPlan=true;try{const next=await api('/plan');if(next.runId!==plan.runId){plan=next;localSamples=[];straySamples=[];el('rows').textContent='';if(!clock||phoneNow()+clock.offsetMs-clock.calibratedAtMacMs>CLOCK_REFRESH_BEFORE_RUN_MS){notice('发现新计划，提前重新校时，为等待与采样预留有效时间。');await syncClock();}}else{plan=next;}el('plan-status').textContent=plan.runId?`${plan.label||'镜像测试'} · ${plan.targetsMs.length} 次 · 补偿 ${plan.compensationMs||0} ms`:'等待 Mac 发送计划。';if(plan.runId&&plan.targetsMs.length>1&&!Number.isFinite(plan.expectedLatencyMs)){notice('这轮尚无延迟基线，周期序列可能错一拍。请先在 Mac 发起 1 次单击锚定，再用其延迟安排多次测试。');}updateCounter();}catch(e){notice('获取计划失败：'+e.message);}finally{loadingPlan=false;}}
-function updateCounter(){el('counter').textContent=`${localSamples.length} / ${plan.targetsMs.length} 次`;}
-async function sendSamples(){if(posting){pending=true;return;}posting=true;do{pending=false;try{await api('/samples',{runId:plan.runId,samples:localSamples,straySamples,clock:clock?{...clock,ageMs:phoneNow()+clock.offsetMs-clock.calibratedAtMacMs}:null});await summary();}catch(e){notice('保存失败：'+e.message);}}while(pending);posting=false;}
-function matchTarget(received,targets,consumed,compensation=0,expectedLatency=null){const available=targets.map((t,i)=>({index:i+1,target:t})).filter(x=>!consumed.has(x.index));if(!available.length)return null;if(!Number.isFinite(expectedLatency)){if(targets.length!==1)return null;const x=available[0],delta=received-(x.target-compensation);return delta>=-100&&delta<=3000?x:null;}const adjusted=received-(expectedLatency-compensation);available.sort((a,b)=>Math.abs(adjusted-a.target)-Math.abs(adjusted-b.target));const gaps=targets.slice(1).map((t,i)=>t-targets[i]);const tolerance=gaps.length?Math.min(Math.min(...gaps)*.45,150):150;return Math.abs(adjusted-available[0].target)<=tolerance?available[0]:null;}
-function record(event){if(!clock||syncing){notice('正在校时，请等校时完成。');return;}if(!plan.runId||!plan.targetsMs.length){notice('尚无测试计划，正在等待 Mac 发送。');return;}if(document.visibilityState!=='visible')return;if(localSamples.length>=plan.targetsMs.length){notice('本轮已经接收完成，等待 Mac 安排下一轮。');return;}const received=phoneNow()+clock.offsetMs;if(received-clock.calibratedAtMacMs>CLOCK_MAX_AGE_MS){notice('校时已超过 60 秒，本次事件不计入样本。请重新校时，并在 Mac 重新发起本轮测试。');return;}const compensation=Number(plan.compensationMs||0);const expected=Number.isFinite(plan.expectedLatencyMs)?plan.expectedLatencyMs:0;const gaps=plan.targetsMs.slice(1).map((t,i)=>t-plan.targetsMs[i]);const earlyTolerance=Number.isFinite(plan.expectedLatencyMs)?(gaps.length?Math.min(Math.min(...gaps)*.45,150):150):100;if(received<plan.targetsMs[0]+expected-compensation-earlyTolerance){notice('计划尚未开始，这次手动点击没有计入测试。');return;}const matched=matchTarget(received,plan.targetsMs,new Set(localSamples.map(x=>x.index)),compensation,plan.expectedLatencyMs);if(!matched){straySamples.push({receivedMacMs:received,phonePerfMs:performance.now(),eventType:event.type,reason:'outside-match-window-or-ambiguous-phase'});notice(`未匹配事件 ${straySamples.length} 次，已单独记录，没有占用后续目标序号。`);sendSamples();return;}const sample={index:matched.index,receivedMacMs:received,phonePerfMs:performance.now(),offsetMs:clock.offsetMs,rttMs:clock.rttMs,uncertaintyEstimateMs:clock.uncertaintyEstimateMs,eventType:event.type,targetMs:matched.target,errorMs:received-matched.target};localSamples.push(sample);updateCounter();const row=document.createElement('tr');for(const text of [sample.index,new Date(received).toISOString().slice(11,23),(sample.errorMs>=0?'+':'')+sample.errorMs.toFixed(3)+' ms']){const cell=document.createElement('td');cell.textContent=text;row.appendChild(cell);}el('rows').prepend(row);el('target').classList.add('hit');setTimeout(()=>el('target').classList.remove('hit'),90);sendSamples();}
-if(window.PointerEvent){el('target').addEventListener('pointerup',record);}else{el('target').addEventListener('touchend',record,{passive:true});}
+const el = id => document.getElementById(id);
+const ms = n => Number.isFinite(n) ? n.toFixed(3) + ' ms' : '—';
+const CLOCK_MAX_AGE_MS = 60000, CLOCK_REFRESH_BEFORE_RUN_MS = 40000;
+let clock = null, plan = {runId: '', targetsMs: []}, localSamples = [], straySamples = [], latestSummary = null;
+let syncing = false, syncTask = null, loadingPlan = false, uploading = false;
+const pendingUploads = new Map();
+const phoneNow = () => performance.timeOrigin + performance.now();
+function timeBasis(value) { return value && value.timeBasis === 'ntp-utc' ? 'ntp-utc' : 'raw-system'; }
+function knownBasis(value) { return !value || value.timeBasis === undefined || value.timeBasis === 'ntp-utc' || value.timeBasis === 'raw-system'; }
+function clockIdentity(value) { return timeBasis(value) + ':' + (value && typeof value.clockId === 'string' ? value.clockId : 'legacy-raw'); }
+function runIdentity(value) { return (value.runId || '') + '\n' + clockIdentity(value); }
+function formatBeijing(value, full = false) {
+  if (!Number.isFinite(value)) return '—';
+  const date = new Date(value + 8 * 3600000);
+  if (!Number.isFinite(date.getTime())) return '—';
+  const text = date.toISOString();
+  return full ? text.slice(0, 10) + ' ' + text.slice(11, 23) : text.slice(11, 23);
+}
+function clockAge(value, now = phoneNow()) { return value ? Math.max(0, now - value.calibratedAtPhoneMs) : Infinity; }
+function absoluteUncertainty(value, now = phoneNow()) {
+  if (!value) return NaN;
+  const elapsed = Math.max(0, now - (value.ntpEstimateAtPhoneMs ?? value.calibratedAtPhoneMs));
+  return value.uncertaintyEstimateMs + (timeBasis(value) === 'ntp-utc'
+    ? value.ntpEstimatedUncertaintyMs + elapsed * (value.ntpDriftPPM || 0) / 1e6 : 0);
+}
+function clockMatches(value, target = plan) {
+  return !!value && (!target.runId || clockIdentity(value) === clockIdentity(target));
+}
+function clockUsable(value, target = plan, now = phoneNow()) {
+  if (!clockMatches(value, target) || clockAge(value, now) > CLOCK_MAX_AGE_MS) return false;
+  if (timeBasis(value) === 'ntp-utc') {
+    if (value.clockFresh !== true || !value.clockId) return false;
+    const limit = value.clockValidUntilMs ?? value.validUntilMs;
+    if (Number.isFinite(limit) && now + value.offsetMs >= limit) return false;
+  }
+  return true;
+}
+function estimateClock(t0, t1, t2, t3) {
+  const rtt = (t3 - t0) - (t2 - t1);
+  if (![t0, t1, t2, t3, rtt].every(Number.isFinite) || t3 < t0 || t2 < t1 || rtt < -0.5) {
+    throw Error('校时响应时间无效，请重新校时。');
+  }
+  return {offsetMs: ((t1 - t0) + (t2 - t3)) / 2, rttMs: Math.max(0, rtt),
+    uncertaintyEstimateMs: Math.max(0, rtt) / 2};
+}
+async function api(path, body) {
+  const response = await fetch(path, {method: body ? 'POST' : 'GET',
+    headers: body ? {'Content-Type': 'application/json'} : {},
+    body: body ? JSON.stringify(body) : undefined, cache: 'no-store'});
+  const json = await response.json();
+  if (!response.ok) throw Error(json.error || response.statusText);
+  return json;
+}
+function notice(message) { el('notice').textContent = message; }
+function renderClock() {
+  el('rtt').textContent = clock ? ms(clock.rttMs) : '—';
+  const ntp = clock && timeBasis(clock) === 'ntp-utc';
+  const combined = absoluteUncertainty(clock);
+  el('uncertainty').textContent = Number.isFinite(combined) ? '估计 ±' + ms(combined) : '—';
+  el('clock-status').textContent = clock
+    ? (ntp ? '已对齐 NTP。' : '仅对齐 Mac 本机时钟，未做 NTP 到点校验。') +
+      '使用 20 轮最低 RTT 样本；' + (clock.source || '') + '。'
+    : '时钟尚未就绪；不会记录本轮点击。';
+}
+async function syncClock() {
+  if (syncTask) return syncTask;
+  if (localSamples.length > 0 && localSamples.length < plan.targetsMs.length) {
+    notice('本轮已开始采样，不能中途更换手机校时时钟。请完成本轮，或从 Mac 发起新计划。');
+    return clockUsable(clock) ? clock : null;
+  }
+  syncing = true; clock = null; renderClock(); el('sync').disabled = true;
+  syncTask = (async () => {
+    try {
+      const rounds = []; let identity = null;
+      for (let n = 0; n < 20; n++) {
+        const t0 = phoneNow(), server = await api('/time'), t3 = phoneNow();
+        if (!knownBasis(server)) throw Error('服务器返回了未知时间基准，请更新手机测试页。');
+        const basis = timeBasis(server), candidateIdentity = clockIdentity(server);
+        if (basis === 'ntp-utc' && (!server.clockId || server.clockFresh !== true)) {
+          throw Error('Mac 的 NTP 授时已过期或不可用，请在 Mac 重新授时。');
+        }
+        if (basis === 'ntp-utc' && (!Number.isFinite(server.ntpEstimatedUncertaintyMs) || server.ntpEstimatedUncertaintyMs < 0)) {
+          throw Error('NTP 授时缺少有效的不确定度估计，不能作为绝对时刻校验。');
+        }
+        if (identity !== null && identity !== candidateIdentity) throw Error('校时期间时间基准改变，请等待新计划后重新校时。');
+        identity = candidateIdentity;
+        rounds.push({...estimateClock(t0, server.receiveMs, server.sendMs, t3),
+          clockId: server.clockId, timeBasis: basis, clockFresh: server.clockFresh !== false,
+          ntpEstimatedUncertaintyMs: Number.isFinite(server.ntpEstimatedUncertaintyMs) ? server.ntpEstimatedUncertaintyMs : 0,
+          ntpEstimateAtPhoneMs: t3,
+          ntpDriftPPM: Number.isFinite(server.ntpDriftPPM) && server.ntpDriftPPM >= 0 ? server.ntpDriftPPM : 0,
+          source: server.source || (basis === 'ntp-utc' ? 'Mac NTP 授时' : 'Mac 原始系统时钟'),
+          clockValidUntilMs: server.clockValidUntilMs ?? server.validUntilMs});
+        el('clock-status').textContent = '正在校时 ' + (n + 1) + ' / 20…';
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      rounds.sort((a, b) => a.rttMs - b.rttMs);
+      const selected = rounds[0], now = phoneNow();
+      const result = {...selected, rounds: 20, calibratedAtPhoneMs: now, calibratedAtMacMs: now + selected.offsetMs};
+      if (!clockMatches(result) || document.visibilityState !== 'visible') {
+        throw Error('页面或测试计划已改变，等待重新校时。');
+      }
+      clock = result; renderClock();
+      notice(timeBasis(clock) === 'ntp-utc' ? 'NTP 时间已就绪。收到点击时立即记时，随后再上传结果。' : '本机相对校时完成；NTP 到点校验请从 Mac 发起。');
+      sendReadinessIfUpcoming();
+      return result;
+    } catch (error) { clock = null; renderClock(); notice('校时失败：' + error.message); return null; }
+    finally { syncing = false; syncTask = null; el('sync').disabled = false; }
+  })();
+  return syncTask;
+}
+function validPlan(value) {
+  if (!value || !knownBasis(value) || !Array.isArray(value.targetsMs) || !value.targetsMs.every(Number.isFinite)) return false;
+  if (timeBasis(value) === 'ntp-utc' && (!value.clockId || typeof value.clockId !== 'string')) return false;
+  return !value.runId || value.targetsMs.length > 0;
+}
+function needsNearTargetRefresh(value, reference, now = phoneNow()) {
+  if (!value.runId || !reference || localSamples.length || !value.targetsMs.length) return false;
+  const remaining = value.targetsMs[0] - (now + reference.offsetMs);
+  return remaining > 0 && remaining <= 20000 && clockAge(reference, now) >= CLOCK_REFRESH_BEFORE_RUN_MS;
+}
+function resetResults() {
+  localSamples = []; straySamples = []; latestSummary = null; el('rows').textContent = '';
+  ['median', 'p95', 'latency', 'target-time', 'sent-time', 'received-time'].forEach(id => { el(id).textContent = '—'; });
+  el('matched').textContent = '0 / 0';
+}
+function renderBasis() {
+  el('time-basis').textContent = timeBasis(plan) === 'ntp-utc'
+    ? 'NTP 北京时间 · UTC+8；手机接收时刻为回调入口记录。'
+    : '本机时间参考 · UTC+8；本轮不是 NTP 到点校验。';
+  el('target-time').textContent = formatBeijing(latestSummary?.latestTargetMs ?? plan.targetsMs[0]);
+  el('target-date').textContent = Number.isFinite(plan.targetsMs[0])
+    ? '目标日期：' + formatBeijing(plan.targetsMs[0], true).slice(0, 10) + '；时:分:秒.毫秒'
+    : '等待 Mac 发起测试。';
+}
+async function loadPlan() {
+  if (loadingPlan) return;
+  loadingPlan = true;
+  try {
+    const next = await api('/plan');
+    if (!validPlan(next)) throw Error('测试计划缺少有效时间或时间基准，请在 Mac 重新发起。');
+    const changed = runIdentity(next) !== runIdentity(plan);
+    plan = next;
+    if (changed) {
+      resetResults(); renderBasis();
+      if (!clockMatches(clock)) { clock = null; renderClock(); }
+      updateCounter(); await summary();
+    }
+    el('plan-status').textContent = plan.runId
+      ? (plan.label || '镜像测试') + ' · ' + plan.targetsMs.length + ' 次 · 补偿 ' + (plan.compensationMs || 0) + ' ms'
+      : '等待 Mac 发送计划。';
+    if (plan.runId && timeBasis(plan) === 'ntp-utc' && plan.clockFresh === false) {
+      clock = null; renderClock(); updateCounter(); renderBasis();
+      notice('Mac 已报告本轮 NTP 基准过期或改变；不会记录新点击。过去有效的结果仍可查看。');
+      return;
+    }
+    if (!clock || !clockMatches(clock) || needsNearTargetRefresh(plan, clock)) await syncClock();
+    if (changed) sendReadinessIfUpcoming();
+    if (plan.runId && plan.targetsMs.length > 1 && !Number.isFinite(plan.expectedLatencyMs)) {
+      notice('本轮尚无延迟基线，周期序列可能错一拍。请先从 Mac 发起单击锚定。');
+    }
+    updateCounter(); renderBasis();
+  } catch (error) { notice('获取计划失败：' + error.message); }
+  finally { loadingPlan = false; }
+}
+function savedSampleCount() { return Number.isInteger(latestSummary?.sampleCount) ? Math.max(0, latestSummary.sampleCount) : 0; }
+function updateCounter() { el('counter').textContent = Math.max(localSamples.length, savedSampleCount()) + ' / ' + plan.targetsMs.length + ' 次'; }
+function createUploadSnapshot(target = plan, reference = clock, samples = localSamples, stray = straySamples) {
+  const body = {runId: target.runId, timeBasis: timeBasis(target), samples, straySamples: stray,
+    clock: reference ? {...reference, ageMs: clockAge(reference)} : null};
+  if (typeof target.clockId === 'string') body.clockId = target.clockId;
+  return JSON.parse(JSON.stringify(body));
+}
+function sendSamples() {
+  if (!plan.runId || !clockUsable(clock)) return;
+  const snapshot = createUploadSnapshot();
+  pendingUploads.set(runIdentity(snapshot), snapshot);
+  flushUploads();
+}
+function sendReadinessIfUpcoming() {
+  // A reload or re-sync of a completed report must never relabel its old
+  // samples with a newer LAN calibration. Only a future empty run needs ready.
+  if (plan.runId && localSamples.length === 0 && savedSampleCount() === 0 && straySamples.length === 0 &&
+      clockUsable(clock) && plan.targetsMs[0] > phoneNow() + clock.offsetMs) sendSamples();
+}
+async function flushUploads() {
+  if (uploading) return;
+  uploading = true;
+  try {
+    while (pendingUploads.size) {
+      const [key, snapshot] = pendingUploads.entries().next().value;
+      pendingUploads.delete(key);
+      try {
+        const result = await api('/samples', snapshot);
+        if (key === runIdentity(plan)) applySummary(result, key);
+      } catch (error) { if (key === runIdentity(plan)) notice('保存失败：' + error.message); }
+    }
+  } finally { uploading = false; }
+}
+function matchTarget(received, targets, consumed, compensation = 0, expectedLatency = null) {
+  const available = targets.map((target, index) => ({index: index + 1, target})).filter(value => !consumed.has(value.index));
+  if (!available.length) return null;
+  if (!Number.isFinite(expectedLatency)) {
+    if (targets.length !== 1) return null;
+    const first = available[0], delta = received - (first.target - compensation);
+    return delta >= -100 && delta <= 3000 ? first : null;
+  }
+  const adjusted = received - (expectedLatency - compensation);
+  available.sort((a, b) => Math.abs(adjusted - a.target) - Math.abs(adjusted - b.target));
+  const gaps = targets.slice(1).map((target, index) => target - targets[index]);
+  const tolerance = gaps.length ? Math.min(Math.min(...gaps) * 0.45, 150) : 150;
+  return Math.abs(adjusted - available[0].target) <= tolerance ? available[0] : null;
+}
+function record(event) {
+  // Capture the callback entry before DOM reads, plan checks or any networking.
+  const callbackPhoneMs = phoneNow();
+  const activePlan = plan, activeClock = clock;
+  if (savedSampleCount() > 0 && localSamples.length === 0) {
+    notice('本页显示已保存的结果，处于只读状态。请从 Mac 发起新计划，不会覆盖原来的点击。'); return;
+  }
+  if (!activeClock || syncing || !clockUsable(activeClock, activePlan, callbackPhoneMs)) {
+    notice('时钟未就绪、已过期或与计划不一致，本次不计入样本。请重新校时。'); return;
+  }
+  if (!activePlan.runId || !activePlan.targetsMs.length) { notice('尚无测试计划，正在等待 Mac 发送。'); return; }
+  if (document.visibilityState !== 'visible') return;
+  if (localSamples.length >= activePlan.targetsMs.length) { notice('本轮接收完成，等待下一轮测试。'); return; }
+  const received = callbackPhoneMs + activeClock.offsetMs;
+  const compensation = Number(activePlan.compensationMs || 0);
+  const expected = Number.isFinite(activePlan.expectedLatencyMs) ? activePlan.expectedLatencyMs : 0;
+  const gaps = activePlan.targetsMs.slice(1).map((target, index) => target - activePlan.targetsMs[index]);
+  const earlyTolerance = Number.isFinite(activePlan.expectedLatencyMs) ? (gaps.length ? Math.min(Math.min(...gaps) * 0.45, 150) : 150) : 100;
+  if (received < activePlan.targetsMs[0] + expected - compensation - earlyTolerance) {
+    notice('计划尚未开始，本次手动点击未计入测试。'); return;
+  }
+  const matched = matchTarget(received, activePlan.targetsMs, new Set(localSamples.map(value => value.index)), compensation, activePlan.expectedLatencyMs);
+  const common = {receivedMacMs: received, phonePerfMs: callbackPhoneMs - performance.timeOrigin,
+    timeBasis: timeBasis(activeClock), eventType: event.type};
+  if (activeClock.clockId) common.clockId = activeClock.clockId;
+  if (!matched) {
+    straySamples.push({...common, reason: 'outside-match-window-or-ambiguous-phase'});
+    notice('未匹配事件 ' + straySamples.length + ' 次，已单独记录，没有占用目标序号。'); sendSamples(); return;
+  }
+  const sample = {...common, index: matched.index, offsetMs: activeClock.offsetMs,
+    rttMs: activeClock.rttMs, uncertaintyEstimateMs: activeClock.uncertaintyEstimateMs,
+    targetMs: matched.target, errorMs: received - matched.target};
+  localSamples.push(sample); updateCounter();
+  el('received-time').textContent = formatBeijing(received);
+  const row = document.createElement('tr');
+  [sample.index, formatBeijing(received), (sample.errorMs >= 0 ? '+' : '') + sample.errorMs.toFixed(3) + ' ms'].forEach(text => {
+    const cell = document.createElement('td'); cell.textContent = text; row.appendChild(cell);
+  });
+  el('rows').prepend(row); el('target').classList.add('hit');
+  setTimeout(() => el('target').classList.remove('hit'), 90);
+  sendSamples();
+}
+if (window.PointerEvent) el('target').addEventListener('pointerup', record);
+else el('target').addEventListener('touchend', record, {passive: true});
 // No click listener: Safari can synthesize click after touchend/pointerup.
-async function summary(){try{const s=await api('/summary');el('median').textContent=ms(s.p50ErrorMs);el('p95').textContent=ms(s.p95AbsErrorMs);el('latency').textContent=ms(s.medianLatencyMs);el('matched').textContent=`${s.sampleCount} / ${s.matchedSendCount}`;el('result-status').textContent=s.medianLatencyMs===null?'等待 Mac 上传真实 mouseUp 发送时间；目前只计算目标时刻误差。':`本轮测得中位延迟 ${s.medianLatencyMs.toFixed(3)} ms。补偿后应重新跑一轮，检查剩余误差。`;}catch(e){notice('获取结果失败：'+e.message);}}
-el('sync').onclick=syncClock;el('refresh').onclick=loadPlan;el('refresh-summary').onclick=summary;
-el('prepare').onclick=async()=>{if(!clock){notice('请先校时。');return;}try{const start=phoneNow()+clock.offsetMs+15000;await api('/test-plan',{runId:'phone-'+Date.now(),targetsMs:[start],compensationMs:0,label:'手机生成 · 单击锚定'});await loadPlan();notice('计划已生成。Mac 需读取 /plan 的 targetsMs 并按该时刻发送真实点击；本页不会自行制造点击。');}catch(e){notice(e.message);}};
-setInterval(()=>{if(clock){const age=Math.max(0,phoneNow()+clock.offsetMs-clock.calibratedAtMacMs);el('clock-age').textContent=`校时年龄：${(age/1000).toFixed(1)} 秒${age>CLOCK_MAX_AGE_MS?' · 已过期，需重新测':age>CLOCK_REFRESH_BEFORE_RUN_MS?' · 仍有效，新轮次将提前刷新':' · 有效期 60 秒'}`;}if(!clock||!plan.targetsMs.length)return;const now=phoneNow()+clock.offsetMs;const unused=plan.targetsMs.filter((_,i)=>!localSamples.some(x=>x.index===i+1));const next=unused.find(t=>t>=now)||unused[unused.length-1];el('countdown').textContent=!unused.length?'本轮接收完成':`下一次目标 ${(next-now>=0?'-':'+')}${Math.abs(next-now).toFixed(0)} ms`;},50);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')notice('页面曾离开前台；为减少时钟漂移，请在下一轮测试前重新校时。');});
-setInterval(()=>{if(document.visibilityState==='visible')loadPlan();},500);
-syncClock();loadPlan();summary();
+function applySummary(value, expectedKey = runIdentity(plan)) {
+  if (expectedKey !== runIdentity(plan) || !value || value.runId !== plan.runId) return false;
+  if (plan.clockId && value.clockId !== plan.clockId) return false;
+  if (value.timeBasis && timeBasis(value) !== timeBasis(plan)) return false;
+  latestSummary = value;
+  el('median').textContent = ms(value.p50ErrorMs); el('p95').textContent = ms(value.p95AbsErrorMs);
+  el('latency').textContent = ms(value.medianLatencyMs);
+  el('matched').textContent = (value.sampleCount || 0) + ' / ' + (value.matchedSendCount || 0);
+  el('target-time').textContent = formatBeijing(value.latestTargetMs ?? plan.targetsMs[0]);
+  el('sent-time').textContent = formatBeijing(value.latestSentUpMs);
+  el('received-time').textContent = formatBeijing(value.latestReceivedMs ?? localSamples.at(-1)?.receivedMacMs);
+  el('result-status').textContent = Number.isFinite(value.medianLatencyMs)
+    ? '接收相对目标 ' + ms(value.p50ErrorMs) + '；发送到接收 ' + ms(value.medianLatencyMs) + '。两项含义不同。'
+    : '等待 Mac 上传真实 mouseUp 发送时间；当前仅记录手机接收与目标的差值。';
+  if (timeBasis(plan) === 'ntp-utc' && value.samplesClockValidAtEvent === true) {
+    el('result-status').textContent += ' 样本接收时授时有效；事件时估计不确定度约 ±' + ms(value.totalUncertaintyEstimateMs) + '。';
+  }
+  updateCounter(); updateCountdown();
+  return true;
+}
+async function summary() {
+  const key = runIdentity(plan);
+  try { applySummary(await api('/summary'), key); }
+  catch (error) { if (key === runIdentity(plan)) notice('获取结果失败：' + error.message); }
+}
+el('sync').onclick = syncClock; el('refresh').onclick = loadPlan; el('refresh-summary').onclick = summary;
+el('prepare').onclick = async () => {
+  if (!clockUsable(clock)) { notice('请先完成有效校时。'); return; }
+  if (timeBasis(clock) === 'ntp-utc') { notice('NTP 准点测试请从 Mac 发起；本页不会发送真实点击。'); return; }
+  try {
+    const body = {runId: 'phone-' + Date.now(), targetsMs: [phoneNow() + clock.offsetMs + 15000],
+      compensationMs: 0, label: '手机生成 · 单击锚定', timeBasis: timeBasis(clock)};
+    if (clock.clockId) body.clockId = clock.clockId;
+    await api('/test-plan', body); await loadPlan();
+    notice('已生成计划，仍需 Mac 读取目标时刻并发送真实点击；本页不会自行制造点击。');
+  } catch (error) { notice(error.message); }
+};
+function updateCountdown() {
+  const nowPhone = phoneNow();
+  if (clock) {
+    const age = clockAge(clock, nowPhone);
+    const usable = clockUsable(clock, plan, nowPhone);
+    el('uncertainty').textContent = '估计 ±' + ms(absoluteUncertainty(clock, nowPhone));
+    el('clock-age').textContent = '校时年龄：' + (age / 1000).toFixed(1) + ' 秒 · ' +
+      (usable ? '有效；绝对时刻仍有估计不确定度' : '已过期或时间基准变化，点击不会计入');
+  } else el('clock-age').textContent = '校时年龄：— · 等待有效校时';
+  if (plan.targetsMs.length && Math.max(localSamples.length, savedSampleCount()) >= plan.targetsMs.length) {
+    el('countdown').textContent = '本轮接收完成'; return;
+  }
+  if (savedSampleCount() > 0 && localSamples.length === 0) {
+    el('countdown').textContent = '已保存部分结果 · 本页只读；请新建计划'; return;
+  }
+  if (!clock || !plan.targetsMs.length) return;
+  const now = nowPhone + clock.offsetMs;
+  const unused = plan.targetsMs.filter((_, index) => !localSamples.some(value => value.index === index + 1));
+  const next = unused.find(value => value >= now) ?? unused.at(-1);
+  el('countdown').textContent = !unused.length ? '本轮接收完成' :
+    '下一次目标 ' + (next - now >= 0 ? '-' : '+') + Math.abs(next - now).toFixed(0) + ' ms';
+  if (!syncing && needsNearTargetRefresh(plan, clock, nowPhone)) syncClock();
+}
+setInterval(updateCountdown, 50);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') { clock = null; renderClock(); return; }
+  notice('页面重新回到前台，正在重新校时。'); syncClock(); loadPlan();
+});
+setInterval(() => { if (document.visibilityState === 'visible') loadPlan(); }, 500);
+// BOOT: kept separate so the logic tests can provide deterministic clocks.
+syncClock(); loadPlan(); summary();
 </script></body></html>

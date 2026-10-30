@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version (for example 0.5.0)
+        description: Release version (for example 0.7.0)
         required: true
-        default: 0.5.0
+        default: 0.7.0
   push:
     branches: [main]
     paths:
@@ -14,6 +14,7 @@ on:
       - Sources/**
       - Tests/**
       - scripts/**
+      - Calibration/**
       - build.sh
       - run-tests.sh
 
@@ -29,7 +30,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      VERSION: ${{ inputs.version || '0.5.0' }}
+      VERSION: ${{ inputs.version || '0.7.0' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -48,6 +49,17 @@ jobs:
           .build/CalibrationServerTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/NetworkTime.swift Tests/NetworkTimeTests.swift -framework ApplicationServices -o .build/NetworkTimeTests
           .build/NetworkTimeTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/HoldClickEngine.swift Tests/HoldClickEngineTests.swift -framework ApplicationServices -o .build/HoldClickEngineTests
+          .build/HoldClickEngineTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiRegionProfile.swift Tests/DamaiRegionProfileTests.swift -framework ApplicationServices -o .build/DamaiRegionProfileTests
+          .build/DamaiRegionProfileTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiRegionProfile.swift Sources/TargetVisibility.swift Sources/WindowRelativeClickTarget.swift Tests/WindowRelativeClickTargetTests.swift -framework ApplicationServices -o .build/WindowRelativeClickTargetTests
+          .build/WindowRelativeClickTargetTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/HoldClickEngine.swift Sources/ImmediateClickStart.swift Tests/ImmediateClickStartTests.swift -framework ApplicationServices -o .build/ImmediateClickStartTests
+          .build/ImmediateClickStartTests
+          xcrun swiftc -O -swift-version 5 -parse-as-library Sources/BusinessReceiptReview.swift Tests/BusinessReceiptReviewTests.swift -framework AppKit -o .build/BusinessReceiptReviewTests
+          .build/BusinessReceiptReviewTests
+          node Tests/PhoneCalibrationPageTests.js
           for test_name in DamaiPlanTests DamaiRunPolicyTests; do
             xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiPlan.swift Sources/DamaiRunPolicy.swift "Tests/$test_name.swift" -framework ApplicationServices -o ".build/$test_name"
             ".build/$test_name"
@@ -65,13 +77,23 @@ jobs:
           cat > release-notes.md <<'NOTES'
           下载下方 Assets 中的 **DMG（推荐）或 ZIP**，打开后将「准点点击器」拖到「应用程序」。不需要 AI、Python、Node.js、Xcode 或额外运行环境。Source code 是源码，不是安装包。
 
-          新增第三种「大麦方案」：在本机使用 macOS Vision 识别所选 iPhone 镜像视口，分别处理购票、确定、努力刷新、立即提交与继续尝试。每次单击后重新观察，忙态等待，缺票／验证／未知弹窗／支付页停止。无需选机型，不按固定坐标盲轮点。
+          大麦方案改为三键直接控制：框选 1 底部购买、2 努力刷新、3 继续尝试。透明数字与边框显示键位，当前执行区高亮；默认点 1，按住 2／3 接管，松开当前键返回 1。三个区域互斥，无排队或补发。
 
-          提供只预览、立即启动、整分启动，以及频率／次数／时长上限。另需本人开启屏幕录制权限。首帧模型加载可能十几秒，建议提前预览；视觉识别有额外耗时，不沿用 Safari 毫秒补偿。低清、遮挡和不支持的页面会等待或停止，未证明所有大麦情况或真实抢票成功率。不自动选座、换票档、返回重选、下拉刷新或付款。
+          各区域独立频率。底部次数 0 为持续，填具体次数则每轮到数暂停；按 1 或松开临时键返回底部重新计数。提供立即启动、NTP 整分直接首击、首击补偿、运行时长上限及三区测试台。此模式不截图、不做页面识别；支付、验证、缺票等页面须由使用者按 Esc 停止并手动处理。
+
+          大麦三区使用镜像窗口内相对坐标，平移自动跟随；明显缩放后重新框选。可重新框选并自动保存，退出重开后恢复。测试台不覆盖手机坐标。
+
+          新增 NTP 手机到点单击校验，显示计划、Mac 实际发出、手机测试页实际收到三个北京时间和校时不确定度；点击瞬间记录、随后回传，不把报告上传等待算入延迟。可选 15 秒后或所设整分；不会自动把单次结果采用为补偿。
+
+          新增手工挂单回执复盘，严格区分 .040 与 .400。手机测试页结果不代表券商受理耗时；复盘不会自动挂单或改变补偿。
+
+          默认区域 2 为镜像窗口内 x=123、y=499、宽84、高16（内部保留原始小数），参考窗口326×719点。旧完整坐标自动迁移为窗口内坐标，其他自定义选区保留。
+
+          新增独立“立即启动等待”：3000 毫秒为按钮后等待 3 秒，也用于三区测试台；倒计时中可切区或 Esc 取消。“整分首击提前”保持独立，不叠加测试等待。
 
           保留单区、双区、NTP 北京时间、整分定时、延迟补偿、Esc 停止，以及自动分配端口的原生手机校准服务。
 
-          **首次打开：** 当前为 ad-hoc 签名，未使用 Developer ID 签名或 Apple 公证。首次下载后，macOS 可能要求使用者在「系统设置 → 隐私与安全性」确认仍要打开，并亲自开启辅助功能权限；大麦方案还需屏幕录制权限。详见仓库 docs/INSTALL.md。
+          **首次打开：** 当前为 ad-hoc 签名，未使用 Developer ID 签名或 Apple 公证。首次下载后，macOS 可能要求使用者在「系统设置 → 隐私与安全性」确认仍要打开，并亲自开启辅助功能权限。三键模式不需要屏幕录制，键盘拦截以系统实际授权为准。详见仓库 docs/INSTALL.md。
 
           本版在 GitHub 的 macOS Intel runner 从源码构建 Universal App，运行回归测试及无外部运行时的内置资源／HTTP 自检；Apple Silicon 已在开发机运行验证。真实全新 Mac 的安装和 Gatekeeper 流程仍需由接收者完成。软件不保证 ±1 毫秒或任何第三方业务结果。
 
