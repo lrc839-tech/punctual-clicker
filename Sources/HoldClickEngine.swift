@@ -74,6 +74,15 @@ final class HoldClickEngine: @unchecked Sendable {
         }
     }
 
+    /// Keep the original cadence while there is room for another click. Once
+    /// a hold overruns that slot, leave a complete interval after its release;
+    /// never replay the missed slot immediately as a catch-up burst.
+    static func nextDownDeadline(previousPlannedDown: UInt64, interval: UInt64,
+                                 actualUpEnd: UInt64) -> UInt64 {
+        let nominal = previousPlannedDown + interval
+        return nominal > actualUpEnd + 1_000_000 ? nominal : actualUpEnd + interval
+    }
+
     /// The caller maps NTP and any reception compensation to this absolute
     /// monotonic mouse-up deadline before starting. Waiting is excluded from
     /// maximumSeconds. No mouse-down is posted before deadline minus holdMs.
@@ -280,8 +289,8 @@ final class HoldClickEngine: @unchecked Sendable {
                 baseSent += 1
                 if baseSent >= settings.baseCount { selected = nil; generation += 1 }
             }
-            let nominalNext = downDeadline + interval
-            nextDown = nominalNext > upEnd + 1_000_000 ? nominalNext : upEnd + interval
+            nextDown = Self.nextDownDeadline(previousPlannedDown: downDeadline,
+                                            interval: interval, actualUpEnd: upEnd)
             let stopped = stopReason
             condition.unlock()
             let event = ClickEvent(index: index, targetWallEpoch: reference.epoch(at: upDeadline),

@@ -94,7 +94,15 @@ enum HoldClickEngineTests {
                 } catch is ClickEngineError { }
             }
         }
-        try check("默认底部随机落点、成对事件与固定节拍") {
+        try check("正常节拍沿用原计划，过载跳过错过的时隙且不集中补发") {
+            try expect(HoldClickEngine.nextDownDeadline(previousPlannedDown: 1_000_000_000,
+                interval: 40_000_000, actualUpEnd: 1_002_000_000) == 1_040_000_000,
+                "正常释放后没有保持原计划节拍")
+            try expect(HoldClickEngine.nextDownDeadline(previousPlannedDown: 1_000_000_000,
+                interval: 40_000_000, actualUpEnd: 1_045_000_000) == 1_085_000_000,
+                "过载后集中补发了已错过时隙")
+        }
+        try check("默认底部随机落点、成对事件与不补发节拍") {
             let log = Log(), engine = HoldClickEngine(sender: { log.post($0, $1, $2) })
             try log.begin(engine, settings(base: 6))
             try wait("底部未限次暂停") { log.read { $0.records.count == 6 && $0.states.last! == nil } }
@@ -110,8 +118,11 @@ enum HoldClickEngineTests {
                            "默认区域或日志世代错误")
                 try expect(record.event.pointX == down.point.x && record.event.pointY == down.point.y, "日志坐标错误")
                 if i > 0 {
-                    try expect(abs(PrecisionClock.signedMilliseconds(record.event.plannedMouseDownMonoNs,
-                        snapshot.1[i - 1].event.plannedMouseDownMonoNs) - 40) < 0.001, "固定节拍漂移")
+                    // A hosted runner may be descheduled. The engine deliberately
+                    // skips late slots, so observed spacing may exceed 40ms.
+                    // Exact normal/overrun policy is checked deterministically above.
+                    try expect(PrecisionClock.signedMilliseconds(record.event.plannedMouseDownMonoNs,
+                        snapshot.1[i - 1].event.plannedMouseDownMonoNs) >= 40-0.001, "错过时隙后集中补发")
                 }
             }
             try expect(Set(snapshot.0.filter { $0.phase == .mouseDown }.map { "\($0.point.x),\($0.point.y)" }).count > 1,
