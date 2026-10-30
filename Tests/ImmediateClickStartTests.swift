@@ -88,6 +88,10 @@ enum ImmediateClickStartTests {
             try rejects { try ImmediateClickStart(requestedMonoNs: UInt64.max - 1_000_000, delayMs: 1)
                 .firstMouseUp(readyMonoNs: 0, holdMs: 0.5) }
         }
+        if CommandLine.arguments.contains("--deterministic-only") {
+            print("ImmediateClickStartTests: \(passed) deterministic checks passed; real-thread waits remain in the full local suite.")
+            return
+        }
         try check("实际注入引擎等待200ms期间切区仍不提前发送") {
             let request = PrecisionClock.nowNs()
             let first = try ImmediateClickStart(requestedMonoNs: request, delayMs: 200)

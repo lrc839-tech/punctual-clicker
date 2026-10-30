@@ -102,6 +102,10 @@ enum HoldClickEngineTests {
                 interval: 40_000_000, actualUpEnd: 1_045_000_000) == 1_085_000_000,
                 "过载后集中补发了已错过时隙")
         }
+        if CommandLine.arguments.contains("--deterministic-only") {
+            print("HoldClickEngineTests: \(passed) deterministic checks passed; real-thread input scheduling is validated by the full local suite, not a shared CI runner.")
+            return
+        }
         try check("默认底部随机落点、成对事件与不补发节拍") {
             let log = Log(), engine = HoldClickEngine(sender: { log.post($0, $1, $2) })
             try log.begin(engine, settings(base: 6))

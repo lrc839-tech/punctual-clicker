@@ -39,8 +39,9 @@ jobs:
           persist-credentials: false
       - name: Run protocol and NTP regression tests
         # The real-time scheduler benchmark belongs on a controlled local Mac.
-        # Shared hosted runners can be descheduled beyond the tool's late-stop
-        # threshold; that is not an input-delivery accuracy acceptance test.
+        # Shared hosted runners can repeatedly miss every allowed send slot.
+        # Check deterministic policy here; run full threaded suites and actual
+        # input reception locally with run-tests.sh / native self-tests.
         run: |
           mkdir -p .build
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TargetVisibility.swift Tests/TargetVisibilityTests.swift -framework ApplicationServices -o .build/TargetVisibilityTests
@@ -50,13 +51,13 @@ jobs:
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/NetworkTime.swift Tests/NetworkTimeTests.swift -framework ApplicationServices -o .build/NetworkTimeTests
           .build/NetworkTimeTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/HoldClickEngine.swift Tests/HoldClickEngineTests.swift -framework ApplicationServices -o .build/HoldClickEngineTests
-          .build/HoldClickEngineTests
+          .build/HoldClickEngineTests --deterministic-only
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiRegionProfile.swift Tests/DamaiRegionProfileTests.swift -framework ApplicationServices -o .build/DamaiRegionProfileTests
           .build/DamaiRegionProfileTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/DamaiRegionProfile.swift Sources/TargetVisibility.swift Sources/WindowRelativeClickTarget.swift Tests/WindowRelativeClickTargetTests.swift -framework ApplicationServices -o .build/WindowRelativeClickTargetTests
           .build/WindowRelativeClickTargetTests
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/TimingEngine.swift Sources/HoldClickEngine.swift Sources/ImmediateClickStart.swift Tests/ImmediateClickStartTests.swift -framework ApplicationServices -o .build/ImmediateClickStartTests
-          .build/ImmediateClickStartTests
+          .build/ImmediateClickStartTests --deterministic-only
           xcrun swiftc -O -swift-version 5 -parse-as-library Sources/BusinessReceiptReview.swift Tests/BusinessReceiptReviewTests.swift -framework AppKit -o .build/BusinessReceiptReviewTests
           .build/BusinessReceiptReviewTests
           node Tests/PhoneCalibrationPageTests.js
